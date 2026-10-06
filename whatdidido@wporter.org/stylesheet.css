@@ -1,0 +1,11 @@
+/* Colour is an extra cue only: each state also has its own icon shape and
+   the menu header names the state in words. */
+.wdi-panel-box { spacing: 2px; }
+.wdi-state-icon.wdi-recording { color: #ff7b63; }
+.wdi-state-icon.wdi-recovering { color: #f6d32d; }
+.wdi-state-icon.wdi-failed { color: #f6d32d; }
+.wdi-state-icon.wdi-offline { color: #9a9996; }
+
+.wdi-header-title { font-weight: bold; }
+.wdi-header-detail { color: #c0bfbc; font-size: 0.9em; font-feature-settings: "tnum"; }
+.wdi-error { color: #f6d32d; font-size: 0.9em; }

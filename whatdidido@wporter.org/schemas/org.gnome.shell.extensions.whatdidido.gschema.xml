@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.whatdidido" path="/org/gnome/shell/extensions/whatdidido/">
+    <key name="poll-active" type="u">
+      <range min="1" max="60"/>
+      <default>2</default>
+      <summary>Poll interval while active (seconds)</summary>
+      <description>Used while the menu is open or the session is starting, recording, reconnecting or stopping.</description>
+    </key>
+    <key name="poll-idle" type="u">
+      <range min="2" max="3600"/>
+      <default>10</default>
+      <summary>Poll interval while idle (seconds)</summary>
+      <description>Used while the session is stopped, paused or failed, or the server is not running.</description>
+    </key>
+    <key name="microphone-id" type="s">
+      <default>''</default>
+      <summary>Preferred microphone id</summary>
+      <description>Opaque id from the server's microphone list. Empty, or not currently present, = the first microphone.</description>
+    </key>
+    <key name="microphone-label" type="s">
+      <default>''</default>
+      <summary>Label of the preferred microphone</summary>
+      <description>Display only; stored when the microphone is chosen in the menu.</description>
+    </key>
+    <key name="show-mic-indicator" type="b">
+      <default>true</default>
+      <summary>Show a microphone icon in the top bar while the microphone is on</summary>
+    </key>
+  </schema>
+</schemalist>
