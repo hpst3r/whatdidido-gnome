@@ -197,6 +197,9 @@ eq('offline mic', off.mic, {sensitive: false, on: false});
 eq('offline mic indicator', off.micIndicator, false);
 eq('offline intervals insensitive', off.intervalSensitive, false);
 eq('offline pages insensitive', off.pagesSensitive, false);
+eq('offline header shows poll error detail', buildView(null, {running: false, pollError: 'Control token rejected'}).header,
+    {title: 'whatdidido not running', detail: 'Control token rejected'});
+eq('poll error ignored while running', buildView(status, {running: true, pollError: 'x'}).header.detail, '3 screenshots, every 10s, 2 monitors');
 eq('offline running=true with null status is offline', buildView(null, {running: true}).running, false);
 
 if (failed) {

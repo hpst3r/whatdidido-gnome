@@ -110,6 +110,11 @@ export class ControlClient {
         }
     }
 
+    // For opening the session page / day view in a browser.
+    async baseUrl(cancellable) {
+        return (await this._readControl(cancellable)).baseUrl;
+    }
+
     status(cancellable) {
         return this._request('GET', '/control/v1/status', null, cancellable);
     }

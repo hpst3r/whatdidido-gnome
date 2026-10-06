@@ -63,6 +63,8 @@ async function main() {
     eq('no browser headers on GET', r0 && noBrowserHeaders(r0), true);
     eq('host is loopback', r0?.headers.host, `127.0.0.1:${fake.port}`);
 
+    eq('baseUrl from control file', await client.baseUrl?.(null), base);
+
     // --- commands --------------------------------------------------------------
     fake.requests = [];
     eq('pause -> 202 state', await client.command('pause', null), {state: 'paused'});
