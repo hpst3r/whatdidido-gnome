@@ -11,6 +11,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {ControlClient} from './lib/client.js';
 import {buildView, errorText, micSourceItems, pageUrl, pollPeriod} from './lib/model.js';
+import {windowSwitchView} from './lib/window_model.js';
+import {WindowTracker} from './lib/window_tracker.js';
 
 const STATE_CLASSES = ['wdi-stopped', 'wdi-busy', 'wdi-recording', 'wdi-paused', 'wdi-recovering', 'wdi-failed', 'wdi-offline'];
 const ACTIONS = [['start', 'Start'], ['pause', 'Pause'], ['resume', 'Resume'], ['stop', 'Stop']];
@@ -56,11 +58,19 @@ class Indicator extends PanelMenu.Button {
 
         this._buildMenu();
 
+        this._windowTracker = new WindowTracker({
+            settings: this._settings,
+            send: payload => this._client.postWindow(payload, this._actionCancellable),
+            log: message => console.warn(message),
+            onUnavailable: () => this._render(),
+        });
+
         this._settingsIds = [
             this._settings.connect('changed::poll-active', () => this._schedule()),
             this._settings.connect('changed::poll-idle', () => this._schedule()),
             this._settings.connect('changed::show-mic-indicator', () => this._render()),
             this._settings.connect('changed::microphone-id', () => this._renderMics()),
+            this._settings.connect('changed::report-active-window', () => this._render()),
         ];
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open) {
@@ -113,6 +123,12 @@ class Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._micSourceMenu);
         this._intervalMenu = new PopupMenu.PopupSubMenuMenuItem('Screenshot interval');
         this.menu.addMenuItem(this._intervalMenu);
+        this._windowItem = new PopupMenu.PopupSwitchMenuItem('Record active window', false);
+        this._windowItem.connect('toggled', (_item, on) => {
+            if (!this._syncing)
+                this._settings.set_boolean('report-active-window', on);
+        });
+        this.menu.addMenuItem(this._windowItem);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._sessionItem = this.menu.addAction('Open session page', () => this._open('/session'));
@@ -159,6 +175,7 @@ class Indicator extends PanelMenu.Button {
         }
         if (this._cancellable !== cancellable)
             return;
+        this._windowTracker.updateStatus(this._status, this._running);
         this._render();
         this._schedule();
     }
@@ -254,13 +271,21 @@ class Indicator extends PanelMenu.Button {
         for (const [action] of ACTIONS)
             this._actionItems[action].setSensitive(view.actions[action]);
 
+        const windowView = windowSwitchView(this._status, {
+            running: this._running,
+            enabled: this._settings.get_boolean('report-active-window'),
+            unavailable: this._windowTracker.unavailable,
+        });
         this._syncing = true;
         try {
             this._micItem.setToggleState(view.mic.on);
+            this._windowItem.setToggleState(windowView.on);
         } finally {
             this._syncing = false;
         }
         this._micItem.setSensitive(view.mic.sensitive);
+        this._windowItem.label.text = windowView.label;
+        this._windowItem.setSensitive(windowView.sensitive);
         this._micSourceMenu.visible = view.running && this._status.mic?.available === true;
 
         this._renderIntervals(view);
@@ -303,6 +328,7 @@ class Indicator extends PanelMenu.Button {
 
     destroy() {
         this._destroyed = true;
+        this._windowTracker.destroy();
         if (this._timer)
             GLib.source_remove(this._timer);
         this._timer = 0;

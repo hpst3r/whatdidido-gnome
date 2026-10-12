@@ -131,6 +131,14 @@ export class ControlClient {
         return this._request('POST', '/control/v1/interval', {seconds}, cancellable);
     }
 
+    // Active window report (payload from window_model.windowPayload).
+    // 202 -> {recorded: bool}; 409 unavailable (server without
+    // --window-activity) and 400 invalid reject with a ControlError.
+    async postWindow(payload, cancellable) {
+        const data = await this._request('POST', '/control/v1/window', payload, cancellable);
+        return {recorded: data.recorded === true};
+    }
+
     // Turning on picks the preferred microphone (else the first) from a fresh
     // inventory; if the inventory changed in between, re-read it and retry once.
     async setMicOn(on, preferredId, cancellable) {

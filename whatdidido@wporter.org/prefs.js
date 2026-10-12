@@ -4,6 +4,8 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+import {formatExcludedApps, parseExcludedApps} from './lib/window_model.js';
+
 export default class WhatdididoPrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
@@ -52,6 +54,32 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
             settings.connect('changed::microphone-label', sync),
         ];
         sync();
+
+        const activity = new Adw.PreferencesGroup({
+            title: 'Active window',
+            description: 'Only sent to the local work session, only while it is recording ' +
+                '(never while paused), and only if the server offers it (--window-activity).',
+        });
+        page.add(activity);
+        const report = new Adw.SwitchRow({
+            title: 'Record active window',
+            subtitle: 'App, WM class and window title of the focused window, for time accounting',
+        });
+        settings.bind('report-active-window', report, 'active', Gio.SettingsBindFlags.DEFAULT);
+        activity.add(report);
+        const excluded = new Adw.EntryRow({
+            title: 'Apps whose titles are never sent (comma-separated app ids)',
+            show_apply_button: true,
+        });
+        excluded.connect('apply', () =>
+            settings.set_strv('window-title-excluded-apps', parseExcludedApps(excluded.text)));
+        activity.add(excluded);
+        const syncExcluded = () => {
+            excluded.text = formatExcludedApps(settings.get_strv('window-title-excluded-apps'));
+        };
+        ids.push(settings.connect('changed::window-title-excluded-apps', syncExcluded));
+        syncExcluded();
+
         window.connect('close-request', () => {
             for (const id of ids)
                 settings.disconnect(id);

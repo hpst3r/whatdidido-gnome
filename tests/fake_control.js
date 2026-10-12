@@ -2,6 +2,11 @@
 // tests/client_test.js. It enforces the request rules of the contract
 // (bearer token, no browser headers, no query, JSON POST bodies with exactly
 // the documented keys) and records every request it sees.
+//
+// POST /control/v1/window follows whatdidido TIME_ACCOUNTING.md section 3
+// (offered only when `windowActivity` is set). Its sanitiser is written
+// independently of lib/window_model.js on purpose, so the client tests
+// cross-check the two.
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
@@ -9,7 +14,31 @@ const BODY_KEYS = {
     '/control/v1/command': [['action']],
     '/control/v1/mic': [['on'], ['on', 'source_id', 'inventory']],
     '/control/v1/interval': [['seconds']],
+    '/control/v1/window': [['focus'], ['focus', 'app_id', 'app_name', 'wm_class', 'title']],
 };
+const BODY_LIMIT = {'/control/v1/window': 4096};  // bytes; everything else 1 KiB
+const WINDOW_FIELDS = ['app_id', 'app_name', 'wm_class', 'title'];
+
+// Server-side sanitising (section 3), byte-counted with TextEncoder.
+function sanitizeWindowBody(body) {
+    if (body.focus === 'none')
+        return {focus: 'none'};
+    const enc = new TextEncoder();
+    const out = {focus: 'window'};
+    for (const k of WINDOW_FIELDS) {
+        const chars = Array.from(body[k].replace(/[\x00-\x1f\x7f-\x9f]/g, ' '));
+        out[k] = chars.slice(0, k === 'title' ? 1024 : 255).join('');
+    }
+    const size = o => Object.entries(o).reduce((n, [k, v]) => n + enc.encode(k).length + enc.encode(v).length, 0);
+    if (size(out) > 3500) {
+        const chars = Array.from(out.title);
+        do
+            chars.pop();
+        while (chars.length && size({...out, title: `${chars.join('')}…`}) > 3500);
+        out.title = `${chars.join('')}…`;
+    }
+    return out;
+}
 const BROWSER_HEADERS = ['origin', 'cookie', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user'];
 
 export class FakeControl {
@@ -25,6 +54,13 @@ export class FakeControl {
         };
         this.inventory = 'inv1';
         this.mics = [{id: 'm1', label: 'Built-in'}, {id: 'm2', label: 'USB headset'}];
+        // Window activity (--window-activity): off by default, like the server.
+        this.windowActivity = false;
+        this.windows = [];          // recorded active_window metadata, in order
+        this.windowDropped = 0;
+        this.windowCap = 60;        // recorded windows per rolling 60 s
+        this._windowTimes = [];
+        this._lastWindow = null;
         this.server = new Soup.Server({});
         this.server.add_handler(null, (_srv, msg, path, query) => this._handle(msg, path, query));
     }
@@ -65,7 +101,8 @@ export class FakeControl {
 
         let body = null;
         if (method === 'POST') {
-            if (headers['content-type'] !== 'application/json' || raw.length > 1024)
+            const tooLarge = path in BODY_LIMIT ? (bytes?.length ?? 0) > BODY_LIMIT[path] : raw.length > 1024;
+            if (headers['content-type'] !== 'application/json' || tooLarge)
                 return this._reply(msg, 400, {error: 'invalid'});
             try {
                 body = JSON.parse(raw);
@@ -80,7 +117,9 @@ export class FakeControl {
         const route = `${method} ${path}`;
         switch (route) {
         case 'GET /control/v1/status':
-            return this._reply(msg, 200, this.status);
+            return this._reply(msg, 200, this.windowActivity
+                ? {...this.status, window_activity: {available: true, recorded: this.windows.length, dropped: this.windowDropped}}
+                : this.status);
         case 'GET /control/v1/microphones':
             return this._reply(msg, 200, {inventory: this.inventory, microphones: this.mics});
         case 'POST /control/v1/command': {
@@ -91,6 +130,8 @@ export class FakeControl {
             if (!allowed.includes(this.status.state))
                 return this._reply(msg, 409, {error: 'not_allowed'});
             this.status.state = {start: 'starting', pause: 'paused', resume: 'recording', stop: 'stopping'}[body.action];
+            if (body.action !== 'stop')
+                this.forgetWindow();  // pause, resume and start forget the last window
             return this._reply(msg, 202, {state: this.status.state});
         }
         case 'POST /control/v1/mic':
@@ -112,9 +153,47 @@ export class FakeControl {
                 return this._reply(msg, 400, {error: 'invalid'});
             this.status.interval_seconds = body.seconds;
             return this._reply(msg, 200, {interval_seconds: body.seconds});
+        case 'POST /control/v1/window':
+            return this._window(msg, body);
         default:
             return this._reply(msg, 404, {error: 'not_found'});
         }
+    }
+
+    // Also for tests that move the fake into recording "from outside"
+    // (recovery, start completing).
+    forgetWindow() {
+        this._lastWindow = null;
+    }
+
+    resetWindows() {
+        this.windows = [];
+        this.windowDropped = 0;
+        this._windowTimes = [];
+        this._lastWindow = null;
+    }
+
+    _window(msg, body) {
+        const shapeOk = body.focus === 'none'
+            ? Object.keys(body).length === 1
+            : body.focus === 'window' && WINDOW_FIELDS.every(k => typeof body[k] === 'string');
+        if (!shapeOk)
+            return this._reply(msg, 400, {error: 'invalid'});
+        if (!this.windowActivity)
+            return this._reply(msg, 409, {error: 'unavailable'});
+        const meta = sanitizeWindowBody(body);
+        if (this.status.state !== 'recording' || JSON.stringify(meta) === JSON.stringify(this._lastWindow))
+            return this._reply(msg, 202, {recorded: false});
+        const now = GLib.get_monotonic_time();
+        this._windowTimes = this._windowTimes.filter(t => now - t < 60 * 1000000);
+        if (this._windowTimes.length >= this.windowCap) {
+            this.windowDropped++;
+            return this._reply(msg, 202, {recorded: false});
+        }
+        this._windowTimes.push(now);
+        this._lastWindow = meta;
+        this.windows.push(meta);
+        return this._reply(msg, 202, {recorded: true});
     }
 }
 

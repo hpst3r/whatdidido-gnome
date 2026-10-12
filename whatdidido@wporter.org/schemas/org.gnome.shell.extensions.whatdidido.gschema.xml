@@ -27,5 +27,15 @@
       <default>true</default>
       <summary>Show a microphone icon in the top bar while the microphone is on</summary>
     </key>
+    <key name="report-active-window" type="b">
+      <default>true</default>
+      <summary>Report the focused window to the work session</summary>
+      <description>Sends the focused window's app id, app name, WM class and title to the loopback work-session server, only while it is recording and offers window activity (--window-activity). Never while paused.</description>
+    </key>
+    <key name="window-title-excluded-apps" type="as">
+      <default>[]</default>
+      <summary>Apps whose window titles are never sent</summary>
+      <description>Desktop app ids (with or without the .desktop suffix, e.g. org.keepassxc.KeePassXC). Their windows are reported with an empty title.</description>
+    </key>
   </schema>
 </schemalist>

@@ -7,9 +7,10 @@ TEST_RUNTIME ?= $(CURDIR)/build/test-runtime
 
 .PHONY: test live check pack install uninstall nested
 
-# Unit tests (pure model) + client tests against a loopback fake control API.
+# Unit tests (pure models) + client tests against a loopback fake control API.
 test:
 	gjs -m tests/model_test.js
+	gjs -m tests/window_model_test.js
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
 
 # Read-only check against the running server (control.json in $XDG_RUNTIME_DIR).
