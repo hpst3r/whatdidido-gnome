@@ -11,7 +11,12 @@ TEST_RUNTIME ?= $(CURDIR)/build/test-runtime
 test:
 	gjs -m tests/model_test.js
 	gjs -m tests/window_model_test.js
+	gjs -m tests/window_retry_test.js
+	gjs -m tests/window_stale_dedupe_test.js
+	gjs -m tests/window_disable_none_test.js
+	gjs -m tests/window_log_once_test.js
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
+	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
 
 # Read-only check against the running server (control.json in $XDG_RUNTIME_DIR).
 live:

@@ -8,6 +8,11 @@
 
 export const SETTLE_MS = 1000;
 export const SPACING_MS = 2000;
+// Retry of a failed POST (Amendment 2 item 6): 2, 4, 8 ... 60 s.
+export const RETRY_MIN_MS = 2000;
+export const RETRY_MAX_MS = 60000;
+// Distinct error messages remembered for "log once".
+export const LOGGED_MAX = 32;
 export const APP_FIELD_MAX_CHARS = 255;
 export const TITLE_MAX_CHARS = 1024;
 // The server's metadata budget: sum of the UTF-8 bytes of every key and value.
@@ -158,7 +163,15 @@ export function formatExcludedApps(list) {
 //   turned on) forgets the last payload and sends at once (spacing permitting).
 //   So does a changed window_activity.epoch between two polls while active
 //   (a pause and resume, or a recovery, the polls did not see).
-// - Becoming inactive cancels every pending timer.
+// - Becoming inactive cancels every pending timer. Turning the setting off
+//   while active sends {"focus": "none"} once (after any request in flight,
+//   spacing permitting; never retried), unless recording/availability ends
+//   first.
+// - A failed POST (any error except 409 unavailable) forgets the last payload
+//   and retries the *current* focus with backoff RETRY_MIN_MS, doubling up
+//   to RETRY_MAX_MS, until a POST succeeds or the focus changes (a change
+//   goes through the settle timer instead).
+// - Errors are logged once per distinct message (the last LOGGED_MAX kept).
 //
 // deps: now() -> ms (monotonic); setTimer(ms, fn) -> id; clearTimer(id);
 // readFocus() -> raw focus for windowPayload(); send(payload) -> Promise
@@ -166,9 +179,11 @@ export function formatExcludedApps(list) {
 // after a 409 turned reporting off until the next poll.
 export class WindowReporter {
     constructor({now, setTimer, clearTimer, readFocus, send, log = () => {}, onUnavailable = () => {},
-        enabled = true, excluded = [], settleMs = SETTLE_MS, spacingMs = SPACING_MS}) {
+        enabled = true, excluded = [], settleMs = SETTLE_MS, spacingMs = SPACING_MS,
+        retryMinMs = RETRY_MIN_MS, retryMaxMs = RETRY_MAX_MS}) {
         Object.assign(this, {_now: now, _setTimer: setTimer, _clearTimer: clearTimer,
-            _readFocus: readFocus, _send: send, _log: log, _onUnavailable: onUnavailable, _settleMs: settleMs, _spacingMs: spacingMs});
+            _readFocus: readFocus, _send: send, _log: log, _onUnavailable: onUnavailable, _settleMs: settleMs, _spacingMs: spacingMs,
+            _retryMinMs: retryMinMs, _retryMaxMs: retryMaxMs});
         this._enabled = !!enabled;
         this._excluded = excluded;
         this._eligible = false;
@@ -180,9 +195,12 @@ export class WindowReporter {
         this._lastSendAt = -Infinity;
         this._settleTimer = null;
         this._spacingTimer = null;
+        this._retryTimer = null;
+        this._failures = 0;         // consecutive failed POSTs (backoff step)
+        this._offPending = false;   // {"focus": "none"} owed after switching off
         this._inFlight = false;
         this._pending = false;
-        this._lastLogged = null;
+        this._logged = new Set();   // insertion order: oldest first
     }
 
     get active() {
@@ -194,9 +212,14 @@ export class WindowReporter {
     }
 
     setEnabled(on) {
+        const switchedOff = this.active && !on;
         this._update(() => {
             this._enabled = !!on;
         });
+        if (switchedOff) {
+            this._offPending = true;
+            this._flush();
+        }
     }
 
     setExcluded(list) {
@@ -213,6 +236,10 @@ export class WindowReporter {
             this._eligible = windowEligible(status, running);
             this._unavailable = false;
         }, epochChanged);
+        // Not recording (or not offered) any more: the server no longer
+        // attributes time to the last window, so "none" is not needed.
+        if (!this._eligible)
+            this._offPending = false;
     }
 
     // Focus, title or wm-class changed.
@@ -220,6 +247,7 @@ export class WindowReporter {
         if (!this.active)
             return;
         this._clear('_settleTimer');
+        this._clear('_retryTimer');
         this._settleTimer = this._setTimer(this._settleMs, () => {
             this._settleTimer = null;
             this._flush();
@@ -228,8 +256,10 @@ export class WindowReporter {
 
     destroy() {
         this._destroyed = true;
+        this._offPending = false;
         this._clear('_settleTimer');
         this._clear('_spacingTimer');
+        this._clear('_retryTimer');
     }
 
     _clear(name) {
@@ -245,18 +275,28 @@ export class WindowReporter {
         mutate();
         const is = this.active;
         if (is && (!was || restart)) {
-            this._last = null;
-            this._generation++;
+            this._forget();
+            this._offPending = false;
+            if (!was)
+                this._failures = 0;
             this._clear('_settleTimer');
+            this._clear('_retryTimer');
             this._flush();
         } else if (was && !is) {
             this._clear('_settleTimer');
             this._clear('_spacingTimer');
+            this._clear('_retryTimer');
         }
     }
 
+    _forget() {
+        this._last = null;
+        this._generation++;
+    }
+
     _flush() {
-        if (!this.active)
+        const off = this._offPending && !this.active;
+        if (!this.active && !off)
             return;
         if (this._inFlight) {
             this._pending = true;
@@ -272,41 +312,109 @@ export class WindowReporter {
             }
             return;
         }
+        if (off) {
+            this._offPending = false;
+            this._post({focus: 'none'});
+            return;
+        }
         const payload = windowPayload(this._readFocus(), this._excluded);
         if (samePayload(payload, this._last))
             return;
         this._post(payload);
     }
 
+    _logOnce(msg) {
+        if (this._logged.has(msg))
+            return;
+        this._log(msg);
+        this._logged.add(msg);
+        if (this._logged.size > LOGGED_MAX)
+            this._logged.delete(this._logged.values().next().value);
+    }
+
+    _scheduleRetry() {
+        const delay = Math.min(this._retryMinMs * 2 ** (this._failures - 1), this._retryMaxMs);
+        this._clear('_retryTimer');
+        this._retryTimer = this._setTimer(delay, () => {
+            this._retryTimer = null;
+            this._flush();
+        });
+    }
+
     async _post(payload) {
         const generation = this._generation;
+        this._clear('_retryTimer');
         this._inFlight = true;
         this._lastSendAt = this._now();
         try {
             await this._send(payload);
             if (generation === this._generation)
                 this._last = payload;
-            this._lastLogged = null;
+            this._failures = 0;
         } catch (e) {
             if (this._destroyed)
                 return;
             // Messages come from the client (HTTP status/code, transport
             // errors): never the payload, never the token.
-            const msg = `whatdidido: active window report failed: ${e?.message ?? e}`;
-            if (msg !== this._lastLogged)
-                this._log(msg);
-            this._lastLogged = msg;
+            this._logOnce(`whatdidido: active window report failed: ${e?.message ?? e}`);
+            // The server may or may not have recorded it: dedupe against
+            // nothing until a POST succeeds.
+            this._forget();
             if (e?.code === 'unavailable') {
                 this._update(() => {
                     this._unavailable = true;
                 });
                 this._onUnavailable();
+            } else if (this.active) {
+                this._failures++;
+                this._scheduleRetry();
             }
         } finally {
             this._inFlight = false;
             if (this._pending && !this._destroyed) {
                 this._pending = false;
                 this._flush();
+            }
+        }
+    }
+}
+
+// Signal bookkeeping for the focused window (window_tracker.js): follows one
+// window at a time and calls onChange() on its title/wm-class changes. Its
+// `unmanaged` signal drops the handlers (Amendment 2 item 6); disconnecting
+// tolerates a window that is already disposed.
+export class FocusWatch {
+    constructor(onChange) {
+        this._onChange = onChange;
+        this._window = null;
+        this._ids = [];
+    }
+
+    get window() {
+        return this._window;
+    }
+
+    watch(win) {
+        this.clear();
+        if (!win)
+            return;
+        this._window = win;
+        this._ids = [
+            win.connect('notify::title', () => this._onChange()),
+            win.connect('notify::wm-class', () => this._onChange()),
+            win.connect('unmanaged', () => this.clear()),
+        ];
+    }
+
+    clear() {
+        const win = this._window, ids = this._ids;
+        this._window = null;
+        this._ids = [];
+        for (const id of ids) {
+            try {
+                win.disconnect(id);
+            } catch {
+                // The window is already gone; so are its handlers.
             }
         }
     }

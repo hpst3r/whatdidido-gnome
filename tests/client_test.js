@@ -159,13 +159,13 @@ async function main() {
     // The server sanitises too; the client-side sanitiser must agree with it.
     eq('server replaces control characters', [await client.postWindow({...W, title: 'a\nb\u0085c'}, null), fake.windows.at(-1)?.title],
         [{recorded: true}, 'a b c']);
-    const huge = {focus: 'window', app_id: '€'.repeat(255), app_name: 'é'.repeat(255), wm_class: 'a'.repeat(255), title: '😀'.repeat(1100)};
-    await rejects('raw oversized body (> 4 KiB) -> 400', client.postWindow(huge, null), e => e.status === 400 && e.code === 'invalid');
+    const huge = {focus: 'window', app_id: '€'.repeat(255), app_name: 'é'.repeat(255), wm_class: 'a'.repeat(255), title: '😀'.repeat(2100)};
+    await rejects('raw oversized body (> 8 KiB) -> 400', client.postWindow(huge, null), e => e.status === 400 && e.code === 'invalid');
     const clean = sanitizeWindow(huge);
     eq('client-sanitised payload accepted and stored unchanged', [await client.postWindow(clean, null), fake.windows.at(-1)],
         [{recorded: true}, clean]);
     const escapes = sanitizeWindow({focus: 'window', app_id: '\\'.repeat(300), app_name: '"'.repeat(300), wm_class: '\\'.repeat(300), title: '"'.repeat(2000)});
-    eq('worst-case JSON escaping still fits 4 KiB', [await client.postWindow(escapes, null), fake.windows.at(-1)],
+    eq('escape-heavy payload accepted (body limit 8 KiB)', [await client.postWindow(escapes, null), fake.windows.at(-1)],
         [{recorded: true}, escapes]);
     const multi = windowPayload({appId: 'org.gnome.TextEditor.desktop', appName: 'Text Editor', wmClass: 'gnome-text-editor', title: 'Überprüfung — 日本語 😀.txt'});
     eq('multi-byte title round-trips', [await client.postWindow(multi, null), fake.windows.at(-1)], [{recorded: true}, multi]);

@@ -1,16 +1,11 @@
-// Finding: "errors are logged once per distinct message" is reset by every
-// success, so a window whose POST keeps failing (e.g. the 400 body-size case)
-// logs the same warning every time the user focuses it.
-// Run: WDI_REVIEW=1 gjs -m tests/review_log_once_test.js
+// Amendment 2 item 6: a failed POST (transport error, timeout, 5xx, 400) is
+// retried with the *current* focus, with backoff, until it succeeds or the
+// focus changes; also the transition re-send after start/resume, which would
+// otherwise leave the time attributed to the previous window.
+// Run: gjs -m tests/window_retry_test.js
 import System from 'system';
-import GLib from 'gi://GLib';
 
-if (GLib.getenv('WDI_REVIEW') !== '1') {
-    print('SKIP (set WDI_REVIEW=1)');
-    System.exit(0);
-}
-
-import {WindowReporter, sanitizeWindow, windowPayload} from '../whatdidido@wporter.org/lib/window_model.js';
+import {WindowReporter} from '../whatdidido@wporter.org/lib/window_model.js';
 
 let failed = 0;
 function check(name, ok, detail) {
@@ -71,21 +66,32 @@ function harness() {
 const fail = msg => Promise.reject(Object.assign(new Error(msg), {status: 0, code: null}));
 
 async function main() {
+    // Transition re-send fails once (e.g. timeout / 500), then the server is fine.
     const h = harness();
-    h.reply = p => (p.title === 'bad' ? Promise.reject(Object.assign(new Error('HTTP 400 invalid'),
-        {status: 400, code: 'invalid'})) : Promise.resolve({recorded: true}));
+    let calls = 0;
+    h.reply = () => (calls++ === 0 ? fail('request failed: Socket I/O timed out') : Promise.resolve({recorded: true}));
     h.r.updateStatus(rec, true);
     await h.advance(0);
-    for (let i = 0; i < 5; i++) {
-        h.focus = {...h.focus, title: 'bad'};
-        h.r.changed();
-        await h.advance(3000);
-        h.focus = {...h.focus, title: `good${i}`};
-        h.r.changed();
-        await h.advance(3000);
+    // The user keeps working in the same window for a minute; polls keep coming.
+    for (let i = 0; i < 30; i++) {
+        await h.advance(2000);
+        h.r.updateStatus(rec, true);
     }
-    const n = h.logs.filter(m => m.includes('HTTP 400 invalid')).length;
-    check('the same error message is logged once', n === 1, `logged ${n} times: ${JSON.stringify(h.logs)}`);
+    check('transition re-send that failed is retried while the focus is unchanged',
+        h.sent.length >= 2, `sent=${JSON.stringify(h.titles())} timers=${h.timers.size}`);
+
+    // Same for an ordinary focus change whose POST failed.
+    const g = harness();
+    g.r.updateStatus(rec, true);
+    await g.advance(0);
+    g.reply = () => fail('HTTP 500 failed');
+    g.focus = {...g.focus, title: 'two'};
+    g.r.changed();
+    await g.advance(3000);
+    g.reply = () => Promise.resolve({recorded: true});
+    await g.advance(60000);
+    check('failed focus-change POST is retried once the server recovers',
+        g.sent.filter(s => s.p.title === 'two').length >= 2, `sent=${JSON.stringify(g.titles())}`);
 }
 
 main().catch(e => {

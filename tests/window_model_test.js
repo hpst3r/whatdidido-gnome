@@ -6,8 +6,9 @@ import System from 'system';
 
 import {
     SETTLE_MS, SPACING_MS, APP_FIELD_MAX_CHARS, TITLE_MAX_CHARS, METADATA_MAX_BYTES,
+    RETRY_MIN_MS, RETRY_MAX_MS, LOGGED_MAX,
     utf8Length, metadataBytes, sanitizeWindow, isExcluded, windowPayload, samePayload,
-    windowEligible, windowSwitchView, parseExcludedApps, formatExcludedApps, WindowReporter,
+    windowEligible, windowSwitchView, parseExcludedApps, formatExcludedApps, WindowReporter, FocusWatch,
 } from '../whatdidido@wporter.org/lib/window_model.js';
 
 let failed = 0;
@@ -24,8 +25,8 @@ const cps = s => [...s].length;
 const win = (app_id, app_name, wm_class, title) => ({focus: 'window', app_id, app_name, wm_class, title});
 
 // --- constants ------------------------------------------------------------
-eq('constants', [SETTLE_MS, SPACING_MS, APP_FIELD_MAX_CHARS, TITLE_MAX_CHARS, METADATA_MAX_BYTES],
-    [1000, 2000, 255, 1024, 3500]);
+eq('constants', [SETTLE_MS, SPACING_MS, APP_FIELD_MAX_CHARS, TITLE_MAX_CHARS, METADATA_MAX_BYTES,
+    RETRY_MIN_MS, RETRY_MAX_MS, LOGGED_MAX], [1000, 2000, 255, 1024, 3500, 2000, 60000, 32]);
 
 // --- byte accounting (domain rule: sum of utf-8 key + value bytes) --------
 eq('utf8Length ascii/2/3/4-byte', [utf8Length('a'), utf8Length('é'), utf8Length('€'), utf8Length('😀'), utf8Length('')],
@@ -294,7 +295,54 @@ async function schedulerTests() {
     h.focus = {...h.focus, title: 'x'};
     h.r.changed();
     await h.advance(5000);
-    eq('setting off again: nothing more', h.sent.length, 1);
+    eq('setting off while active: focus none once (spacing respected), nothing more',
+        h.sent.map(s => `${s.at}:${s.p.focus}`), ['3000:window', '5000:none']);
+    eq('setting off: no timers left', h.timers.size, 0);
+
+    // Switching off while a POST is in flight: "none" follows its reply.
+    h = harness();
+    let hold;
+    h.reply = () => new Promise(res => {
+        hold = () => res({recorded: true});
+    });
+    h.r.updateStatus(rec, true);
+    await h.advance(2500);
+    h.r.setEnabled(false);
+    await h.advance(1000);
+    eq('off during flight: nothing until the reply', h.sent.length, 1);
+    h.reply = () => Promise.reject(new Error('request failed: boom'));
+    hold();
+    await h.advance(10000);
+    eq('off during flight: none sent after it, failure not retried',
+        h.sent.map(s => `${s.at}:${s.p.focus}`), ['0:window', '3500:none']);
+    eq('off during flight: max one in flight', h.maxInFlight, 1);
+
+    // Off owed but recording ends first (or the setting comes back): no none.
+    h = harness();
+    h.r.updateStatus(rec, true);
+    await h.advance(500);
+    h.r.setEnabled(false);
+    h.r.updateStatus({...rec, state: 'paused'}, true);
+    await h.advance(5000);
+    eq('off then paused before the spacing end: no none', h.sent.length, 1);
+    h = harness();
+    h.r.updateStatus(rec, true);
+    await h.advance(500);
+    h.r.setEnabled(false);
+    h.r.setEnabled(true);
+    await h.advance(5000);
+    eq('off and on again within the spacing: current focus re-sent, no none',
+        h.sent.map(s => `${s.at}:${s.p.focus}`), ['0:window', '2000:window']);
+    h = harness({enabled: false});
+    h.r.updateStatus(rec, true);
+    h.r.setEnabled(false);
+    await h.advance(5000);
+    eq('setting already off: no none', h.sent.length, 0);
+    h = harness();
+    h.r.updateStatus({...rec, state: 'paused'}, true);
+    h.r.setEnabled(false);
+    await h.advance(5000);
+    eq('setting off while paused: no none', h.sent.length, 0);
 
     // Excluded apps.
     h = harness({excluded: ['a.desktop']});
@@ -346,7 +394,7 @@ async function schedulerTests() {
     h.focus = {...h.focus, title: 'TOPSECRET4'};
     h.r.changed();
     await h.advance(3000);
-    eq('error logged once per distinct message', [h.sent.length, h.logs.length], [4, 2]);
+    eq('error logged once per distinct message', h.logs.length, 2);
     eq('logs never contain titles', h.logs.some(l => l.includes('TOPSECRET')), false);
 
     // A failed send is not remembered as sent: the same focus is retried on
@@ -361,7 +409,91 @@ async function schedulerTests() {
     h.reply = () => Promise.resolve({recorded: true});
     h.r.changed();
     await h.advance(3000);
-    eq('failed send retried on next change', h.at(), ['0:one', '4000:two', '7000:two']);
+    eq('failed send retried (backoff, then a change re-sends)', h.at(), ['0:one', '4000:two', '6000:two', '8000:two']);
+    h.r.changed();
+    await h.advance(5000);
+    eq('success is remembered again (dedupe)', h.sent.length, 4);
+
+    // Backoff: 2, 4, 8, 16, 32, 60, 60 s after each failure; reset by success.
+    h = harness();
+    h.reply = () => Promise.reject(Object.assign(new Error('HTTP 500 failed'), {status: 500, code: 'failed'}));
+    h.r.updateStatus(rec, true);
+    await h.advance(200000);
+    const gapsOf = list => list.slice(1).map((s, i) => s.at - list[i].at);
+    eq('backoff doubles from 2 s, capped at 60 s', gapsOf(h.sent),
+        [2000, 4000, 8000, 16000, 32000, 60000, 60000]);
+    eq('retries always carry the current focus', h.sent.every(s => s.title === 'one'), true);
+    eq('backoff: one retry timer at most', h.timers.size, 1);
+    eq('backoff: logged once', h.logs.length, 1);
+    h.reply = () => Promise.resolve({recorded: true});
+    await h.advance(60000);
+    const n = h.sent.length;
+    await h.advance(200000);
+    eq('success stops retrying', h.sent.length, n);
+    h.reply = () => Promise.reject(new Error('request failed: boom'));
+    h.focus = {...h.focus, title: 'two'};
+    h.r.changed();
+    await h.advance(1000);
+    h.focus = {...h.focus, title: 'three'};
+    await h.advance(2000);
+    eq('after a success the backoff starts at 2 s again, with the current focus',
+        h.sent.slice(n).map(s => s.title), ['two', 'three']);
+    eq('... 2 s later', gapsOf(h.sent.slice(n)), [2000]);
+
+    // A focus change cancels the pending retry (settle path instead).
+    h = harness();
+    h.reply = () => Promise.reject(new Error('request failed: boom'));
+    h.r.updateStatus(rec, true);
+    await h.advance(1500);
+    h.reply = () => Promise.resolve({recorded: true});
+    h.focus = {...h.focus, title: 'two'};
+    h.r.changed();
+    await h.advance(5000);
+    eq('change during backoff: retry replaced by the settled send', h.at(), ['0:one', '2500:two']);
+
+    // Inactive (pause) and destroy clear the retry timer.
+    h = harness();
+    h.reply = () => Promise.reject(new Error('request failed: boom'));
+    h.r.updateStatus(rec, true);
+    await h.advance(100);
+    h.r.updateStatus({...rec, state: 'paused'}, true);
+    await h.advance(10000);
+    eq('pause cancels the retry', [h.sent.length, h.timers.size], [1, 0]);
+    h = harness();
+    h.reply = () => Promise.reject(new Error('request failed: boom'));
+    h.r.updateStatus(rec, true);
+    await h.advance(100);
+    h.r.destroy();
+    await h.advance(10000);
+    eq('destroy cancels the retry', [h.sent.length, h.timers.size], [1, 0]);
+
+    // 409 is not retried (inactive until the next poll).
+    h = harness();
+    h.reply = () => Promise.reject(Object.assign(new Error('HTTP 409 unavailable'), {status: 409, code: 'unavailable'}));
+    h.r.updateStatus(rec, true);
+    await h.advance(10000);
+    eq('409: no retry', [h.sent.length, h.timers.size], [1, 0]);
+
+    // Log once: up to LOGGED_MAX distinct messages remembered, oldest evicted.
+    h = harness();
+    let msgNo = 0;
+    h.reply = () => Promise.reject(new Error(`request failed: e${msgNo}`));
+    h.r.updateStatus(rec, true);
+    const failWith = async i => {
+        msgNo = i;
+        h.focus = {...h.focus, title: `w${h.sent.length}`};
+        h.r.changed();
+        await h.advance(3000);
+    };
+    for (let i = 0; i < LOGGED_MAX; i++)
+        await failWith(i);
+    const logged = h.logs.length;
+    for (let i = 0; i < LOGGED_MAX; i++)
+        await failWith(i);
+    eq('32 distinct messages each logged once', [logged, h.logs.length], [LOGGED_MAX, LOGGED_MAX]);
+    await failWith(LOGGED_MAX);      // evicts e0
+    await failWith(0);
+    eq('33rd message evicts the oldest', h.logs.length, LOGGED_MAX + 2);
 
     // One request in flight; a change during it is sent after it completes.
     h = harness();
@@ -526,6 +658,83 @@ async function schedulerTests() {
     await h.advance(10000);
     eq('nothing after destroy', h.sent.length, 1);
 }
+
+// --- focused-window signals (window_tracker.js glue) -------------------------
+// Fake MetaWindow: connect/disconnect/emit; dispose() makes disconnect throw
+// like a GObject that is already gone.
+function fakeWindow() {
+    const w = {handlers: new Map(), nextId: 1, disposed: false, attempts: 0};
+    w.connect = (sig, fn) => {
+        w.handlers.set(w.nextId, {sig, fn});
+        return w.nextId++;
+    };
+    w.disconnect = id => {
+        w.attempts++;
+        if (w.disposed)
+            throw new Error('Object has been already disposed');
+        w.handlers.delete(id);
+    };
+    w.emit = sig => {
+        for (const h of [...w.handlers.values()].filter(x => x.sig === sig))
+            h.fn();
+    };
+    w.signals = () => [...w.handlers.values()].map(h => h.sig).sort();
+    return w;
+}
+
+function focusWatchTests() {
+    let changes = 0;
+    const fw = new FocusWatch(() => changes++);
+    const a = fakeWindow(), b = fakeWindow();
+    fw.watch(a);
+    eq('watch: title, wm-class and unmanaged', a.signals(), ['notify::title', 'notify::wm-class', 'unmanaged']);
+    a.emit('notify::title');
+    a.emit('notify::wm-class');
+    eq('watch: title/wm-class changes reported', changes, 2);
+    fw.watch(b);
+    eq('watch: switching windows disconnects the old one', [a.signals(), b.signals().length, fw.window === b], [[], 3, true]);
+    a.emit('notify::title');
+    eq('watch: old window no longer reported', changes, 2);
+
+    b.emit('unmanaged');
+    eq('unmanaged: handlers cleared', [b.signals(), fw.window], [[], null]);
+    b.emit('notify::title');
+    eq('unmanaged: no reports afterwards', changes, 2);
+    let threw = null;
+    try {
+        fw.watch(a);
+        fw.clear();
+        fw.clear();
+    } catch (e) {
+        threw = e;
+    }
+    eq('clear twice is harmless', [threw, a.signals()], [null, []]);
+
+    // The window went away without a usable `unmanaged` (already disposed):
+    // every disconnect is attempted, none throws, the watch is reset.
+    const c = fakeWindow(), d = fakeWindow();
+    fw.watch(c);
+    c.disposed = true;
+    threw = null;
+    try {
+        fw.watch(d);
+    } catch (e) {
+        threw = e;
+    }
+    eq('disposed window: switching does not throw', String(threw), 'null');
+    eq('disposed window: all three disconnects attempted, new window watched', [c.attempts, fw.window === d, d.signals().length], [3, true, 3]);
+    d.disposed = true;
+    threw = null;
+    try {
+        fw.clear();
+    } catch (e) {
+        threw = e;
+    }
+    eq('disposed window: clear (destroy) does not throw', [String(threw), fw.window], ['null', null]);
+    fw.watch(null);
+    eq('watch(null): nothing watched', fw.window, null);
+}
+focusWatchTests();
 
 await schedulerTests().catch(e => {
     failed++;

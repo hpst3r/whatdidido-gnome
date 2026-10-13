@@ -1,17 +1,10 @@
-// Finding: after a failed POST the reporter keeps deduping against the last
-// payload the server *accepted*. When the failure was ambiguous (timeout or
-// 5xx after the server queued it), switching back to that window is skipped
-// and the server keeps attributing time to the window whose POST "failed".
-// Run: WDI_REVIEW=1 gjs -m tests/review_stale_dedupe_test.js
+// Amendment 2 item 6: a failed POST forgets the last accepted payload. The
+// failure may be ambiguous (timeout or 5xx after the server queued it), so
+// switching back to the previously accepted window must be sent again.
+// Run: gjs -m tests/window_stale_dedupe_test.js
 import System from 'system';
-import GLib from 'gi://GLib';
 
-if (GLib.getenv('WDI_REVIEW') !== '1') {
-    print('SKIP (set WDI_REVIEW=1)');
-    System.exit(0);
-}
-
-import {WindowReporter, sanitizeWindow, windowPayload} from '../whatdidido@wporter.org/lib/window_model.js';
+import {WindowReporter} from '../whatdidido@wporter.org/lib/window_model.js';
 
 let failed = 0;
 function check(name, ok, detail) {

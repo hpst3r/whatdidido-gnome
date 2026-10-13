@@ -1,17 +1,10 @@
-// Finding: client-side sanitising keeps the metadata under 3500 bytes, but the
-// JSON body can still exceed the server's 4096-byte WINDOW_MAX_BYTES (JSON
-// escapes '"' and '\' as two bytes), so the server answers 400 invalid and
-// the window is never recorded ("what is sent is what gets recorded" breaks).
-// Run: WDI_REVIEW=1 gjs -m tests/review_body_size_test.js
+// Amendment 2 item 6: turning "Record active window" off while recording and
+// available sends {"focus": "none"} once, so the server stops attributing
+// active time (and the title) to the last window.
+// Run: gjs -m tests/window_disable_none_test.js
 import System from 'system';
-import GLib from 'gi://GLib';
 
-if (GLib.getenv('WDI_REVIEW') !== '1') {
-    print('SKIP (set WDI_REVIEW=1)');
-    System.exit(0);
-}
-
-import {WindowReporter, sanitizeWindow, windowPayload} from '../whatdidido@wporter.org/lib/window_model.js';
+import {WindowReporter} from '../whatdidido@wporter.org/lib/window_model.js';
 
 let failed = 0;
 function check(name, ok, detail) {
@@ -69,19 +62,20 @@ function harness() {
     h.titles = () => h.sent.map(s => `${s.at}:${s.p.title ?? s.p.focus}`);
     return h;
 }
-const fail = msg => Promise.reject(Object.assign(new Error(msg), {status: 0, code: null}));
 
 async function main() {
-    // An app-less X11 window: Shell's app name is the WM_CLASS, which the
-    // client controls. 255 quotes each, title of backslashes + emoji.
-    const raw = {appId: 'window:42', appName: '"'.repeat(255), wmClass: '"'.repeat(255),
-        title: '\\'.repeat(382) + '😀'.repeat(700)};
-    const body = new TextEncoder().encode(JSON.stringify(windowPayload(raw))).length;
-    check('sanitised POST body fits the server limit (4096 bytes)', body <= 4096, `body=${body} bytes`);
-    const plain = new TextEncoder().encode(JSON.stringify(sanitizeWindow({focus: 'window',
-        app_id: 'org.example.App.desktop', app_name: 'Example', wm_class: 'example',
-        title: '"'.repeat(1024)}))).length;
-    check('control case: a 1024-quote title alone fits', plain <= 4096, `body=${plain} bytes`);
+    const h = harness();
+    h.r.updateStatus(rec, true);
+    await h.advance(0);
+    h.r.setEnabled(false);
+    await h.advance(5000);
+    check('switching reporting off while recording reports {"focus":"none"} once',
+        h.sent.filter(s => s.p.focus === 'none').length === 1 && h.sent.length === 2, `sent=${JSON.stringify(h.titles())}`);
+    h.focus = {...h.focus, title: 'two'};
+    h.r.changed();
+    await h.advance(60000);
+    check('nothing more while off', h.sent.length === 2 && h.timers.size === 0,
+        `sent=${JSON.stringify(h.titles())} timers=${h.timers.size}`);
 }
 
 main().catch(e => {

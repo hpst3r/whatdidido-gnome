@@ -4,9 +4,9 @@
 // the documented keys) and records every request it sees.
 //
 // POST /control/v1/window follows whatdidido TIME_ACCOUNTING.md section 3
-// (offered only when `windowActivity` is set). Its sanitiser is written
-// independently of lib/window_model.js on purpose, so the client tests
-// cross-check the two.
+// and Amendment 2 (8 KiB body limit; offered only when `windowActivity` is
+// set). Its sanitiser is written independently of lib/window_model.js on
+// purpose, so the client tests cross-check the two.
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
@@ -16,7 +16,7 @@ const BODY_KEYS = {
     '/control/v1/interval': [['seconds']],
     '/control/v1/window': [['focus'], ['focus', 'app_id', 'app_name', 'wm_class', 'title']],
 };
-const BODY_LIMIT = {'/control/v1/window': 4096};  // bytes; everything else 1 KiB
+const BODY_LIMIT = {'/control/v1/window': 8192};  // bytes (Amendment 2 item 1); everything else 1 KiB
 const WINDOW_FIELDS = ['app_id', 'app_name', 'wm_class', 'title'];
 
 // Server-side sanitising (section 3), byte-counted with TextEncoder.

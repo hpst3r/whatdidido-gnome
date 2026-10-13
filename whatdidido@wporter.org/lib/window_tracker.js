@@ -1,7 +1,7 @@
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 
-import {WindowReporter} from './window_model.js';
+import {FocusWatch, WindowReporter} from './window_model.js';
 
 // Glue only: watches the focused window (focus, title, wm-class), the two
 // settings, and GLib timers, and feeds WindowReporter (window_model.js),
@@ -13,8 +13,6 @@ export class WindowTracker {
         this._settings = settings;
         this._tracker = Shell.WindowTracker.get_default();
         this._timers = new Set();
-        this._window = null;
-        this._windowIds = [];
 
         this._reporter = new WindowReporter({
             now: () => GLib.get_monotonic_time() / 1000,
@@ -45,8 +43,10 @@ export class WindowTracker {
             settings.connect('changed::window-title-excluded-apps',
                 () => this._reporter.setExcluded(settings.get_strv('window-title-excluded-apps'))),
         ];
+        // Title/wm-class signals follow the focused window only.
+        this._focusWatch = new FocusWatch(() => this._reporter.changed());
         this._focusId = global.display.connect('notify::focus-window', () => this._onFocus());
-        this._watch(global.display.focus_window);
+        this._focusWatch.watch(global.display.focus_window);
     }
 
     get unavailable() {
@@ -73,27 +73,8 @@ export class WindowTracker {
     }
 
     _onFocus() {
-        this._watch(global.display.focus_window);
+        this._focusWatch.watch(global.display.focus_window);
         this._reporter.changed();
-    }
-
-    // Title/wm-class signals follow the focused window only.
-    _watch(win) {
-        this._unwatch();
-        if (!win)
-            return;
-        this._window = win;
-        this._windowIds = [
-            win.connect('notify::title', () => this._reporter.changed()),
-            win.connect('notify::wm-class', () => this._reporter.changed()),
-        ];
-    }
-
-    _unwatch() {
-        for (const id of this._windowIds)
-            this._window.disconnect(id);
-        this._window = null;
-        this._windowIds = [];
     }
 
     destroy() {
@@ -102,7 +83,7 @@ export class WindowTracker {
             GLib.source_remove(id);
         this._timers.clear();
         global.display.disconnect(this._focusId);
-        this._unwatch();
+        this._focusWatch.clear();
         for (const id of this._settingsIds)
             this._settings.disconnect(id);
         this._settings = null;

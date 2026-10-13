@@ -36,9 +36,15 @@ name, the WM class and the window title, or "no focused window".
   After every start/resume/reconnect the current window is sent again.
   So it is when the status's `window_activity.epoch` changed since the last poll
   (a pause/resume or recovery between two polls); servers without it are fine.
+- A failed report (no answer, timeout, 5xx, 400) is retried with the window
+  focused at that moment, after 2, 4, 8 … up to 60 s, until one succeeds or
+  the focus changes.
+- Turning **Record active window** off while recording reports "no focused
+  window" once, so the time stops counting for the last window.
 - Titles are cleaned like the server does (control characters become spaces,
   app fields at most 255 characters, title at most 1024, long titles shortened
-  with `…`) before they leave the extension.
+  with `…`) before they leave the extension. The request body stays under the
+  server's 8 KiB limit for windows even when every character needs escaping.
 - The menu switch is insensitive, with "(not enabled on the server)", when the
   server doesn't offer it.
 
@@ -62,7 +68,7 @@ name, the WM class and the window title, or "no focused window".
   paused), and only when the server offers it and **Record active window** is
   on. Apps listed in `window-title-excluded-apps` are reported with an empty
   title. Window data is never logged; send errors are logged once per distinct
-  message without titles or the token. The server stores reports as event
+  message (the last 32 remembered) without titles or the token. The server stores reports as event
   metadata (see whatdidido's `TIME_ACCOUNTING.md` for where that can go).
 
 ## Settings
@@ -100,8 +106,9 @@ untouched. It needs `mutter-devkit` (GNOME 49+). The nested shell shares
 allowed actions, header text, microphone choice, poll period, control-file
 validation), so it is unit-tested with plain `gjs -m`. Likewise
 `lib/window_model.js` holds the active-window rules (payload, sanitising,
-debounce/spacing scheduler on an injected clock, availability gating) and
-`lib/window_tracker.js` only connects the Shell signals and GLib timers to it. `lib/client.js`
+debounce/spacing/retry scheduler on an injected clock, availability gating,
+the focused window's signal bookkeeping) and `lib/window_tracker.js` only
+connects the Shell signals and GLib timers to it. `lib/client.js`
 (libsoup 3) is tested against `tests/fake_control.js`, a Soup.Server fake that
 enforces the contract's request rules. `extension.js`/`prefs.js` only run
 inside GNOME Shell.

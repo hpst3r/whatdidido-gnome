@@ -1,16 +1,10 @@
-// Finding: turning "Record active window" off while recording sends nothing,
-// so the server's last active_window (title included) keeps receiving all
-// active time until the next start/resume (projection rule 4).
-// Run: WDI_REVIEW=1 gjs -m tests/review_disable_none_test.js
+// Amendment 2 item 6: "logged once per distinct message" survives successes
+// (up to 32 messages remembered), so a window whose POST keeps failing does
+// not log the same warning every time it is focused.
+// Run: gjs -m tests/window_log_once_test.js
 import System from 'system';
-import GLib from 'gi://GLib';
 
-if (GLib.getenv('WDI_REVIEW') !== '1') {
-    print('SKIP (set WDI_REVIEW=1)');
-    System.exit(0);
-}
-
-import {WindowReporter, sanitizeWindow, windowPayload} from '../whatdidido@wporter.org/lib/window_model.js';
+import {WindowReporter} from '../whatdidido@wporter.org/lib/window_model.js';
 
 let failed = 0;
 function check(name, ok, detail) {
@@ -68,16 +62,23 @@ function harness() {
     h.titles = () => h.sent.map(s => `${s.at}:${s.p.title ?? s.p.focus}`);
     return h;
 }
-const fail = msg => Promise.reject(Object.assign(new Error(msg), {status: 0, code: null}));
 
 async function main() {
     const h = harness();
+    h.reply = p => (p.title === 'bad' ? Promise.reject(Object.assign(new Error('HTTP 400 invalid'),
+        {status: 400, code: 'invalid'})) : Promise.resolve({recorded: true}));
     h.r.updateStatus(rec, true);
     await h.advance(0);
-    h.r.setEnabled(false);
-    await h.advance(5000);
-    check('switching reporting off while recording reports {"focus":"none"} once',
-        h.sent.some(s => s.p.focus === 'none'), `sent=${JSON.stringify(h.titles())}`);
+    for (let i = 0; i < 5; i++) {
+        h.focus = {...h.focus, title: 'bad'};
+        h.r.changed();
+        await h.advance(3000);
+        h.focus = {...h.focus, title: `good${i}`};
+        h.r.changed();
+        await h.advance(3000);
+    }
+    const n = h.logs.filter(m => m.includes('HTTP 400 invalid')).length;
+    check('the same error message is logged once', n === 1, `logged ${n} times: ${JSON.stringify(h.logs)}`);
 }
 
 main().catch(e => {
