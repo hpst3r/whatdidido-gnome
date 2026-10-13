@@ -2,7 +2,10 @@
   "uuid": "whatdidido@wporter.org",
   "name": "whatdidido",
   "description": "Top-bar control for a whatdidido work session: start, pause, resume and stop recording, microphone on/off and screenshot interval.",
-  "shell-version": ["50"],
+  "shell-version": [
+    "50"
+  ],
   "settings-schema": "org.gnome.shell.extensions.whatdidido",
-  "version-name": "0.1.0"
+  "version-name": "0.1.0",
+  "url": "https://github.com/hpst3r/whatdidido-gnome"
 }

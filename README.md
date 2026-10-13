@@ -1,6 +1,6 @@
 # whatdidido-gnome
 
-GNOME Shell (50) top-bar control for a [whatdidido](../whatdidido) work
+GNOME Shell (50) top-bar control for a [whatdidido](https://github.com/hpst3r/whatdidido) work
 session. It talks to the work-session server's local control API
 (`/control/v1/*`) and shows:
 
@@ -144,3 +144,7 @@ timeout for its next due time and shows the notification. `lib/client.js`
 (libsoup 3) is tested against `tests/fake_control.js`, a Soup.Server fake that
 enforces the contract's request rules. `extension.js`/`prefs.js` only run
 inside GNOME Shell.
+
+## License
+
+AGPL-3.0-or-later. See [LICENSE](LICENSE).
