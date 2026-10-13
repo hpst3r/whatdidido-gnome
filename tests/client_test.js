@@ -5,7 +5,7 @@ import GLib from 'gi://GLib';
 import System from 'system';
 
 import {ControlClient} from '../whatdidido@wporter.org/lib/client.js';
-import {sanitizeWindow, windowPayload} from '../whatdidido@wporter.org/lib/window_model.js';
+import {sanitizeWindow, windowPayload, WindowReporter} from '../whatdidido@wporter.org/lib/window_model.js';
 import {FakeControl, writeControlFile, removeControlFile} from './fake_control.js';
 
 const here = GLib.path_get_dirname(GLib.filename_from_uri(import.meta.url)[0]);
@@ -129,8 +129,9 @@ async function main() {
     eq('status without window_activity when not offered', 'window_activity' in (await client.status(null)), false);
 
     fake.windowActivity = true;
+    // One accepted pause above -> epoch 1.
     eq('status window_activity when offered', (await client.status(null)).window_activity,
-        {available: true, recorded: 0, dropped: 0});
+        {available: true, recorded: 0, dropped: 0, epoch: 1});
     eq('window -> 202 recorded', await client.postWindow(W, null), {recorded: true});
     eq('same window -> recorded false', await client.postWindow(W, null), {recorded: false});
     eq('focus none -> recorded', await client.postWindow({focus: 'none'}, null), {recorded: true});
@@ -140,6 +141,12 @@ async function main() {
     eq('while paused -> recorded false', await client.postWindow(W, null), {recorded: false});
     await client.command('resume', null);
     eq('resume forgets the last window', await client.postWindow({focus: 'none'}, null), {recorded: true});
+    eq('pause and resume each bump the epoch', (await client.status(null)).window_activity.epoch, 3);
+    fake.forgetWindow();  // simulated recovery
+    eq('recovery bumps the epoch', (await client.status(null)).window_activity.epoch, 4);
+    fake.windowEpochReported = false;
+    eq('older server: no epoch', 'epoch' in (await client.status(null)).window_activity, false);
+    fake.windowEpochReported = true;
 
     for (const [name, bad] of [
         ['missing keys', {focus: 'window', title: 'x'}],
@@ -169,7 +176,91 @@ async function main() {
     for (let i = 0; i < 61; i++)
         results.push((await client.postWindow({...W, title: `cap ${i}`}, null))?.recorded);
     eq('cap: 60 recorded then dropped', [results.filter(r => r).length, results.at(-1)], [60, false]);
-    eq('status counts recorded/dropped', (await client.status(null)).window_activity, {available: true, recorded: 60, dropped: 1});
+    eq('status counts recorded/dropped', (await client.status(null)).window_activity, {available: true, recorded: 60, dropped: 1, epoch: 4});
+
+    // --- window epoch end to end: WindowReporter + client + fake ----------------------
+    // A pause and resume between two polls leaves the state "recording"; only
+    // the epoch shows the server forgot the window, so it must be re-sent.
+    const W2 = {appId: 'org.gnome.Ptyxis.desktop', appName: 'Terminal', wmClass: 'org.gnome.Ptyxis', title: 'vim'};
+    const until = async cond => {
+        for (let i = 0; i < 200 && !cond(); i++)
+            await new Promise(res => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10, () => (res(), GLib.SOURCE_REMOVE)));
+    };
+    const epochRun = async (epochReported, script) => {
+        fake.resetWindows();
+        fake.windowEpochReported = epochReported;
+        fake.status.state = 'recording';
+        const run = {t: 0, posts: [], timers: 0};
+        run.r = new WindowReporter({
+            now: () => run.t,
+            setTimer: () => ++run.timers,
+            clearTimer: () => {},
+            readFocus: () => W2,
+            send: p => {
+                const pr = client.postWindow(p, null);
+                run.posts.push(pr);
+                return pr;
+            },
+        });
+        run.settle = async () => {
+            for (let n = -1; n !== run.posts.length;) {
+                n = run.posts.length;
+                await Promise.allSettled(run.posts);
+                for (let i = 0; i < 20; i++)
+                    await null;
+            }
+        };
+        run.poll = async () => {
+            run.r.updateStatus(await client.status(null), true);
+            await run.settle();
+        };
+        run.pauseResume = async () => {
+            await client.command('pause', null);
+            await client.command('resume', null);
+        };
+        await run.poll();
+        await script(run);
+        run.r.destroy();
+        return [run.posts.length, fake.windows.length];
+    };
+    eq('epoch: pause+resume between polls re-sends and is recorded', await epochRun(true, async run => {
+        run.t = 5000;
+        await run.pauseResume();
+        await run.poll();
+    }), [2, 2]);
+    eq('epoch: unchanged epoch does not re-send', await epochRun(true, async run => {
+        run.t = 5000;
+        await run.poll();
+        run.t = 10000;
+        await run.poll();
+    }), [1, 1]);
+    eq('epoch: simulated recovery between polls re-sends', await epochRun(true, async run => {
+        run.t = 5000;
+        fake.forgetWindow();
+        await run.poll();
+    }), [2, 2]);
+    eq('epoch missing (older server): old behaviour, no re-send', await epochRun(false, async run => {
+        run.t = 5000;
+        await run.pauseResume();
+        await run.poll();
+    }), [1, 1]);
+    // The server records the window, but its reply only arrives after the
+    // poll that saw the new epoch: that reply must not count as the re-send.
+    eq('epoch: change while a send is in flight', await epochRun(true, async run => {
+        run.t = 5000;
+        await run.pauseResume();     // forget: the reporter's next send records again
+        fake.holdWindowReplies = true;
+        run.r.updateStatus(await client.status(null), true);  // epoch 2 -> re-send
+        const inFlight = run.posts.at(-1);
+        await until(() => fake.heldWindowReplies === 1);  // recorded, reply held
+        await run.pauseResume();     // the server forgets that window again
+        run.r.updateStatus(await client.status(null), true);  // epoch 4 while in flight
+        run.t = 10000;
+        fake.releaseWindowReplies();
+        await inFlight;
+        await run.settle();
+    }), [3, 3]);
+    fake.windowEpochReported = true;
     fake.status.state = 'paused';
 
     // --- 403: re-read control file (server restarted with a new token) -----------

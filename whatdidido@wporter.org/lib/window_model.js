@@ -113,6 +113,13 @@ export function windowEligible(status, running) {
     return windowActivityOffered(status, running) && status.state === 'recording';
 }
 
+// window_activity.epoch (Amendment 1): bumped by the server whenever it
+// forgets the last recorded window. null when absent (older server) or invalid.
+export function windowEpoch(status, running) {
+    const epoch = windowActivityOffered(status, running) ? status.window_activity.epoch : undefined;
+    return Number.isInteger(epoch) && epoch >= 0 ? epoch : null;
+}
+
 const SWITCH_LABEL = 'Record active window';
 
 // The menu switch. unavailable: the server answered 409 since the last poll.
@@ -149,6 +156,8 @@ export function formatExcludedApps(list) {
 //   the spacing waits for its end and then uses the focus at that moment.
 // - Becoming active (transition into recording, from unavailable, setting
 //   turned on) forgets the last payload and sends at once (spacing permitting).
+//   So does a changed window_activity.epoch between two polls while active
+//   (a pause and resume, or a recovery, the polls did not see).
 // - Becoming inactive cancels every pending timer.
 //
 // deps: now() -> ms (monotonic); setTimer(ms, fn) -> id; clearTimer(id);
@@ -167,6 +176,7 @@ export class WindowReporter {
         this._destroyed = false;
         this._last = null;          // last payload the server accepted (202)
         this._generation = 0;       // bumped whenever _last is forgotten
+        this._epoch = null;         // window_activity.epoch of the last poll
         this._lastSendAt = -Infinity;
         this._settleTimer = null;
         this._spacingTimer = null;
@@ -196,10 +206,13 @@ export class WindowReporter {
 
     // After every status poll; status is null when the server is not running.
     updateStatus(status, running) {
+        const epoch = windowEpoch(status, running);
+        const epochChanged = epoch !== null && this._epoch !== null && epoch !== this._epoch;
+        this._epoch = epoch;
         this._update(() => {
             this._eligible = windowEligible(status, running);
             this._unavailable = false;
-        });
+        }, epochChanged);
     }
 
     // Focus, title or wm-class changed.
@@ -226,11 +239,12 @@ export class WindowReporter {
         }
     }
 
-    _update(mutate) {
+    // restart: treat staying active like becoming active.
+    _update(mutate, restart = false) {
         const was = this.active;
         mutate();
         const is = this.active;
-        if (!was && is) {
+        if (is && (!was || restart)) {
             this._last = null;
             this._generation++;
             this._clear('_settleTimer');

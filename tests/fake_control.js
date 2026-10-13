@@ -61,6 +61,13 @@ export class FakeControl {
         this.windowCap = 60;        // recorded windows per rolling 60 s
         this._windowTimes = [];
         this._lastWindow = null;
+        // Amendment 1: incremented whenever the last window is forgotten.
+        // windowEpochReported = false mimics an older server without it.
+        this.windowEpoch = 0;
+        this.windowEpochReported = true;
+        // Hold POST /window replies (already processed) until releaseWindowReplies().
+        this.holdWindowReplies = false;
+        this._held = [];
         this.server = new Soup.Server({});
         this.server.add_handler(null, (_srv, msg, path, query) => this._handle(msg, path, query));
     }
@@ -117,9 +124,7 @@ export class FakeControl {
         const route = `${method} ${path}`;
         switch (route) {
         case 'GET /control/v1/status':
-            return this._reply(msg, 200, this.windowActivity
-                ? {...this.status, window_activity: {available: true, recorded: this.windows.length, dropped: this.windowDropped}}
-                : this.status);
+            return this._reply(msg, 200, this.windowActivity ? {...this.status, window_activity: this._windowStatus()} : this.status);
         case 'GET /control/v1/microphones':
             return this._reply(msg, 200, {inventory: this.inventory, microphones: this.mics});
         case 'POST /control/v1/command': {
@@ -154,16 +159,37 @@ export class FakeControl {
             this.status.interval_seconds = body.seconds;
             return this._reply(msg, 200, {interval_seconds: body.seconds});
         case 'POST /control/v1/window':
-            return this._window(msg, body);
+            this._window(msg, body);
+            if (this.holdWindowReplies) {
+                msg.pause();
+                this._held.push(msg);
+            }
+            return undefined;
         default:
             return this._reply(msg, 404, {error: 'not_found'});
         }
     }
 
-    // Also for tests that move the fake into recording "from outside"
-    // (recovery, start completing).
+    _windowStatus() {
+        const wa = {available: true, recorded: this.windows.length, dropped: this.windowDropped};
+        return this.windowEpochReported ? {...wa, epoch: this.windowEpoch} : wa;
+    }
+
+    // Start, pause, resume and recovery forget the last window and bump the
+    // epoch. Also for tests that simulate a recovery "from outside".
     forgetWindow() {
         this._lastWindow = null;
+        this.windowEpoch++;
+    }
+
+    get heldWindowReplies() {
+        return this._held.length;
+    }
+
+    releaseWindowReplies() {
+        this.holdWindowReplies = false;
+        for (const msg of this._held.splice(0))
+            msg.unpause();
     }
 
     resetWindows() {

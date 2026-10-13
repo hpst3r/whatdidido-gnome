@@ -34,6 +34,8 @@ name, the WM class and the window title, or "no focused window".
 - Changes (focus, title, WM class) settle for 1 s, then the current window is
   sent if it differs from the last one sent; at most one request per 2 s.
   After every start/resume/reconnect the current window is sent again.
+  So it is when the status's `window_activity.epoch` changed since the last poll
+  (a pause/resume or recovery between two polls); servers without it are fine.
 - Titles are cleaned like the server does (control characters become spaces,
   app fields at most 255 characters, title at most 1024, long titles shortened
   with `…`) before they leave the extension.

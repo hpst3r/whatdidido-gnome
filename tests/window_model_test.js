@@ -394,6 +394,123 @@ async function schedulerTests() {
     await h.advance(0);
     eq('stale response does not suppress transition re-send', h.at(), ['0:one', '2500:one']);
 
+    // Window epoch (Amendment 1 item 2): a changed epoch while recording is a
+    // transition into recording (pause + resume between two polls).
+    const recE = e => ({...rec, window_activity: {...WA, epoch: e}});
+    h = harness();
+    h.r.updateStatus(recE(0), true);
+    await h.advance(3000);
+    h.r.updateStatus(recE(0), true);
+    await h.advance(3000);
+    eq('epoch: unchanged epoch does not re-send', h.at(), ['0:one']);
+    h.r.updateStatus(recE(2), true);
+    await h.advance(0);
+    eq('epoch: changed epoch re-sends the same focus at once', h.at(), ['0:one', '6000:one']);
+    h.r.updateStatus(recE(2), true);
+    await h.advance(3000);
+    eq('epoch: same epoch again does not re-send', h.sent.length, 2);
+    h.r.updateStatus(recE(3), true);
+    await h.advance(0);
+    eq('epoch: each change re-sends', h.at(), ['0:one', '6000:one', '9000:one']);
+    h.r.updateStatus(recE(4), true);
+    await h.advance(0);
+    eq('epoch: re-send respects spacing (deferred)', h.sent.length, 3);
+    await h.advance(SPACING_MS);
+    eq('epoch: ... then sent', h.at(), ['0:one', '6000:one', '9000:one', '11000:one']);
+
+    // A pending settle is replaced by the immediate re-send.
+    h = harness();
+    h.r.updateStatus(recE(0), true);
+    await h.advance(3000);
+    h.focus = {...h.focus, title: 'two'};
+    h.r.changed();
+    await h.advance(200);
+    h.r.updateStatus(recE(1), true);
+    await h.advance(5000);
+    eq('epoch: re-send uses current focus, settle cancelled', h.at(), ['0:one', '3200:two']);
+
+    // Missing epoch (older server): exactly the old behaviour.
+    h = harness();
+    h.r.updateStatus(rec, true);
+    await h.advance(3000);
+    h.r.updateStatus(rec, true);
+    await h.advance(3000);
+    h.r.updateStatus(recE(5), true);
+    await h.advance(3000);
+    h.r.updateStatus(rec, true);
+    await h.advance(3000);
+    h.r.updateStatus(recE(6), true);
+    await h.advance(3000);
+    eq('epoch missing/appearing/disappearing: no re-send', h.at(), ['0:one']);
+    for (const bad of ['7', -1, 1.5, null, true]) {
+        h.r.updateStatus({...rec, window_activity: {...WA, epoch: bad}}, true);
+        await h.advance(3000);
+    }
+    h.r.updateStatus(recE(8), true);
+    await h.advance(3000);
+    eq('epoch: non-integer/negative values are treated as missing', h.at(), ['0:one']);
+
+    // Epoch change together with a real transition sends once.
+    h = harness();
+    h.r.updateStatus(recE(0), true);
+    await h.advance(3000);
+    h.r.updateStatus({...recE(1), state: 'paused'}, true);
+    await h.advance(3000);
+    h.r.updateStatus(recE(2), true);
+    await h.advance(3000);
+    eq('epoch: paused -> recording with a new epoch sends once', h.at(), ['0:one', '6000:one']);
+
+    // Epoch changes while inactive (setting off, paused) never send.
+    h = harness({enabled: false});
+    h.r.updateStatus(recE(0), true);
+    h.r.updateStatus(recE(1), true);
+    await h.advance(3000);
+    eq('epoch: setting off -> nothing sent', h.sent.length, 0);
+    h = harness();
+    h.r.updateStatus({...recE(0), state: 'paused'}, true);
+    h.r.updateStatus({...recE(1), state: 'paused'}, true);
+    await h.advance(3000);
+    eq('epoch: paused -> nothing sent', h.sent.length, 0);
+
+    // Server restart (not running in between) with a smaller epoch: the
+    // not-running transition re-sends once, no double send.
+    h = harness();
+    h.r.updateStatus(recE(9), true);
+    await h.advance(3000);
+    h.r.updateStatus(null, false);
+    h.r.updateStatus(recE(0), true);
+    await h.advance(3000);
+    h.r.updateStatus(recE(0), true);
+    await h.advance(3000);
+    eq('epoch: restart re-sends once', h.at(), ['0:one', '3000:one']);
+
+    // Epoch change while a send is in flight: the stale response must not be
+    // remembered, the re-send follows the response (spacing permitting), and
+    // there is never more than one request in flight.
+    h = harness();
+    h.r.updateStatus(recE(0), true);
+    await h.advance(3000);
+    h.focus = {...h.focus, title: 'two'};
+    h.r.changed();
+    h.reply = () => new Promise(res => {
+        release = () => res({recorded: false});
+    });
+    await h.advance(1000); // t=4000: POST "two" (epoch 0) in flight
+    eq('epoch in flight: request started', h.at(), ['0:one', '4000:two']);
+    h.r.updateStatus(recE(1), true);
+    await h.advance(500);
+    eq('epoch in flight: no second POST while one is in flight', h.sent.length, 2);
+    h.reply = () => Promise.resolve({recorded: true});
+    release?.();
+    await h.advance(0);
+    eq('epoch in flight: re-send deferred to spacing end', h.sent.length, 2);
+    await h.advance(SPACING_MS);
+    eq('epoch in flight: same focus re-sent after the stale response', h.at(), ['0:one', '4000:two', '6000:two']);
+    eq('epoch in flight: never two in flight', h.maxInFlight, 1);
+    h.r.changed();
+    await h.advance(5000);
+    eq('epoch in flight: re-send is remembered (dedupe afterwards)', h.sent.length, 3);
+
     // destroy removes every timer.
     h = harness();
     h.r.updateStatus(rec, true);
