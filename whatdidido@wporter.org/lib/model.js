@@ -2,6 +2,8 @@
 // Input shapes follow whatdidido's work-session control API (v1):
 // GET /control/v1/status is the /session/status object plus `mic`.
 
+import {pausedForText} from './pause_reminder.js';
+
 export const STATES = ['stopped', 'starting', 'recording', 'paused', 'recovering', 'stopping', 'failed'];
 export const INTERVAL_CHOICES = [5, 10, 30, 60];
 export const NOT_RUNNING_TEXT = 'whatdidido not running';
@@ -200,17 +202,21 @@ export function errorText(err) {
 
 // Everything the indicator renders. status is null when the server is not
 // running (no control file, connection refused, ...); pollError is shown
-// under the header for other failures (e.g. a rejected token).
-export function buildView(status, {running = true, showMic = true, pollError = null} = {}) {
+// under the header for other failures (e.g. a rejected token). pausedMs: how
+// long the session has been paused (PauseReminder.pausedFor), or null.
+export function buildView(status, {running = true, showMic = true, pollError = null, pausedMs = null} = {}) {
     running = running && !!status;
     const state = running ? status.state : null;
     const mic = micSwitch(status, running);
+    const header = running ? headerText(status) : {title: NOT_RUNNING_TEXT, detail: pollError ?? ''};
+    if (state === 'paused' && pausedMs !== null)
+        header.detail = `${pausedForText(pausedMs)} · ${header.detail}`;
     return {
         running,
         state,
         panel: panelState(state, running),
         micIndicator: running && showMic && status.mic?.on === true,
-        header: running ? headerText(status) : {title: NOT_RUNNING_TEXT, detail: pollError ?? ''},
+        header,
         actions: allowedActions(state),
         mic,
         intervals: intervalItems(running ? status.interval_seconds : null),

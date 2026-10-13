@@ -202,6 +202,18 @@ eq('offline header shows poll error detail', buildView(null, {running: false, po
 eq('poll error ignored while running', buildView(status, {running: true, pollError: 'x'}).header.detail, '3 screenshots, every 10s, 2 monitors');
 eq('offline running=true with null status is offline', buildView(null, {running: true}).running, false);
 
+// --- paused: how long, from the pause reminder's pausedSince --------------------
+const paused = {...status, state: 'paused'};
+const COUNTS = '3 screenshots, every 10s, 2 monitors';
+eq('paused header shows minutes', buildView(paused, {running: true, pausedMs: 12 * 60000 + 59999}).header,
+    {title: 'Paused', detail: `Paused for 12 min · ${COUNTS}`});
+eq('paused header 1 min', buildView(paused, {running: true, pausedMs: 60000}).header.detail, `Paused for 1 min · ${COUNTS}`);
+eq('paused header below one minute', buildView(paused, {running: true, pausedMs: 59999}).header.detail, `Paused for <1 min · ${COUNTS}`);
+eq('paused header at 0', buildView(paused, {running: true, pausedMs: 0}).header.detail, `Paused for <1 min · ${COUNTS}`);
+eq('paused header without pausedSince', buildView(paused, {running: true, pausedMs: null}).header.detail, COUNTS);
+eq('pausedMs ignored when not paused', buildView(status, {running: true, pausedMs: 5 * 60000}).header.detail, COUNTS);
+eq('pausedMs ignored when not running', buildView(null, {running: false, pausedMs: 5 * 60000}).header.detail, '');
+
 if (failed) {
     print(`${failed} failed`);
     (await import('system')).default.exit(1);

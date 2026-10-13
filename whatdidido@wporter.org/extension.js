@@ -6,11 +6,13 @@ import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {ControlClient} from './lib/client.js';
 import {buildView, errorText, micSourceItems, pageUrl, pollPeriod} from './lib/model.js';
+import {PauseReminder, REMINDER_TITLE, timerDelay} from './lib/pause_reminder.js';
 import {windowSwitchView} from './lib/window_model.js';
 import {WindowTracker} from './lib/window_tracker.js';
 
@@ -19,6 +21,10 @@ const ACTIONS = [['start', 'Start'], ['pause', 'Pause'], ['resume', 'Resume'], [
 
 function isCancelled(e) {
     return e?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
+}
+
+function monotonicMs() {
+    return GLib.get_monotonic_time() / 1000;
 }
 
 const Indicator = GObject.registerClass(
@@ -41,6 +47,11 @@ class Indicator extends PanelMenu.Button {
         this._intervalKey = '';
         this._syncing = false;
         this._destroyed = false;
+        this._reminder = new PauseReminder({minutes: this._settings.get_uint('pause-reminder-minutes')});
+        this._reminderTimer = 0;
+        this._reminderSource = null;
+        this._reminderNotification = null;
+        this._resumeLogged = null;
 
         const box = new St.BoxLayout({style_class: 'panel-status-indicators-box wdi-panel-box'});
         this._stateIcon = new St.Icon({
@@ -71,6 +82,8 @@ class Indicator extends PanelMenu.Button {
             this._settings.connect('changed::show-mic-indicator', () => this._render()),
             this._settings.connect('changed::microphone-id', () => this._renderMics()),
             this._settings.connect('changed::report-active-window', () => this._render()),
+            this._settings.connect('changed::pause-reminder-minutes', () => this._applyReminder(
+                this._reminder.setMinutes(this._settings.get_uint('pause-reminder-minutes'), monotonicMs()))),
         ];
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open) {
@@ -156,6 +169,7 @@ class Indicator extends PanelMenu.Button {
         this._cancellable?.cancel();
         const cancellable = new Gio.Cancellable();
         this._cancellable = cancellable;
+        let observed = true;  // false: the poll failed, the state is unknown
         try {
             this._status = await this._client.status(cancellable);
             this._running = true;
@@ -166,6 +180,7 @@ class Indicator extends PanelMenu.Button {
                 return;
             this._status = null;
             this._running = false;
+            observed = e.notRunning === true;
             // "Not running" is the normal idle case: never logged. Anything
             // else is logged once per distinct message (no token in messages).
             this._pollError = e.notRunning ? null : errorText(e);
@@ -175,6 +190,10 @@ class Indicator extends PanelMenu.Button {
         }
         if (this._cancellable !== cancellable)
             return;
+        // Only a status or "not running" says whether the session is still
+        // paused; any other poll failure leaves the reminder as it was.
+        if (observed)
+            this._applyReminder(this._reminder.observe(this._running ? this._status.state : null, monotonicMs()));
         this._windowTracker.updateStatus(this._status, this._running);
         this._render();
         this._schedule();
@@ -195,6 +214,101 @@ class Indicator extends PanelMenu.Button {
 
     _command(action) {
         this._act(c => this._client.command(action, c));
+    }
+
+    // The reminder's Resume: the menu's path, plus a log line once per
+    // distinct failure (the menu shows it too).
+    _resumeFromReminder() {
+        this._act(async c => {
+            try {
+                await this._client.command('resume', c);
+                this._resumeLogged = null;
+            } catch (e) {
+                if (!isCancelled(e)) {
+                    const text = errorText(e);
+                    if (text !== this._resumeLogged)
+                        console.warn(`whatdidido: resume from the pause reminder failed: ${e.message}`);
+                    this._resumeLogged = text;
+                }
+                throw e;
+            }
+        });
+    }
+
+    // effect from PauseReminder: {show: body or null, withdraw}. Then (re)arm
+    // the one timeout for the next due reminder.
+    _applyReminder({show, withdraw}) {
+        if (this._destroyed)
+            return;
+        if (withdraw)
+            this._withdrawReminder();
+        if (show)
+            this._showReminder(show);
+        if (this._reminderTimer)
+            GLib.source_remove(this._reminderTimer);
+        this._reminderTimer = 0;
+        const delay = timerDelay(this._reminder.dueAt, monotonicMs());
+        if (delay === null)
+            return;
+        this._reminderTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._reminderTimer = 0;
+            this._applyReminder(this._reminder.fire(monotonicMs()));
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // A Source destroys itself when its last notification goes (and the user
+    // can dismiss it), so it is created on demand.
+    _ensureReminderSource() {
+        if (this._reminderSource)
+            return this._reminderSource;
+        const source = new MessageTray.Source({title: 'whatdidido', iconName: 'media-playback-pause-symbolic'});
+        source.connect('destroy', () => {
+            if (this._reminderSource === source)
+                this._reminderSource = null;
+        });
+        Main.messageTray.add(source);
+        this._reminderSource = source;
+        return source;
+    }
+
+    // Replaces the previous reminder, so the banner shows again instead of
+    // stacking. The new one is added first: removing the source's only
+    // notification would destroy the source.
+    _showReminder(body) {
+        const source = this._ensureReminderSource();
+        const old = this._reminderNotification;
+        const notification = new MessageTray.Notification({
+            source,
+            title: REMINDER_TITLE,
+            body,
+            urgency: MessageTray.Urgency.HIGH,
+        });
+        // The shell destroys a notification after any of its actions runs,
+        // so forget it first and never destroy it twice.
+        notification.addAction('Resume', () => {
+            this._forgetReminder(notification);
+            this._resumeFromReminder();
+        });
+        notification.addAction('Stop reminding', () => {
+            this._forgetReminder(notification);
+            this._applyReminder(this._reminder.suppress());
+        });
+        notification.connect('destroy', () => this._forgetReminder(notification));
+        this._reminderNotification = notification;
+        source.addNotification(notification);
+        old?.destroy(MessageTray.NotificationDestroyedReason.REPLACED);
+    }
+
+    _forgetReminder(notification) {
+        if (this._reminderNotification === notification)
+            this._reminderNotification = null;
+    }
+
+    _withdrawReminder() {
+        const notification = this._reminderNotification;
+        this._reminderNotification = null;
+        notification?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
     }
 
     _setMic(on) {
@@ -249,6 +363,7 @@ class Indicator extends PanelMenu.Button {
             running: this._running,
             showMic: this._settings.get_boolean('show-mic-indicator'),
             pollError: this._pollError,
+            pausedMs: this._reminder.pausedFor(monotonicMs()),
         });
 
         this._stateIcon.icon_name = view.panel.icon;
@@ -332,6 +447,12 @@ class Indicator extends PanelMenu.Button {
         if (this._timer)
             GLib.source_remove(this._timer);
         this._timer = 0;
+        if (this._reminderTimer)
+            GLib.source_remove(this._reminderTimer);
+        this._reminderTimer = 0;
+        this._reminderNotification = null;
+        this._reminderSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
+        this._reminderSource = null;
         this._cancellable?.cancel();
         this._actionCancellable.cancel();
         for (const id of this._settingsIds)

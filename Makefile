@@ -10,6 +10,7 @@ TEST_RUNTIME ?= $(CURDIR)/build/test-runtime
 # Unit tests (pure models) + client tests against a loopback fake control API.
 test:
 	gjs -m tests/model_test.js
+	gjs -m tests/pause_reminder_test.js
 	gjs -m tests/window_model_test.js
 	gjs -m tests/window_retry_test.js
 	gjs -m tests/window_stale_dedupe_test.js

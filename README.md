@@ -8,7 +8,9 @@ session. It talks to the work-session server's local control API
   stopped, failed, or server not running — each with its own icon shape, plus a
   small microphone icon while the microphone is on (can be turned off in
   settings).
-- **Menu:** the state in words and "N screenshots, every Xs, M monitors";
+- **Menu:** the state in words and "N screenshots, every Xs, M monitors"
+  (while paused, prefixed with how long: "Paused for 12 min", "<1 min" under
+  a minute);
   Start / Pause / Resume / Stop (only those allowed in the current state);
   a **Microphone** switch; **Microphone source** (remembered in settings);
   **Screenshot interval** (5/10/30/60 s, current one marked); **Record active
@@ -19,6 +21,32 @@ Polling: every 2 s while the menu is open or the session is starting,
 recording, reconnecting or stopping, otherwise every 10 s (both configurable);
 also on menu open. When the server isn't running the icon shows that and the
 menu says "whatdidido not running"; nothing is logged for it.
+
+## Pause reminder
+
+So a forgotten pause doesn't silently cost work capture: while the session
+stays **paused**, a notification "Recording is paused" ("Paused for N minutes.
+Screenshots, audio and window activity aren't being recorded.") appears after
+`pause-reminder-minutes` (default 10) and again every that many minutes after
+the previous one. Each reminder replaces the last, so the banner shows again
+instead of piling up. It is a high-urgency notification: it shows a banner but
+still respects Do Not Disturb.
+
+- **Resume** resumes the session (same request as the menu's Resume); a
+  failure is shown in the menu and logged once, and the reminders go on.
+- **Stop reminding** stops the reminders until the session leaves paused.
+- Leaving paused (resume, stop, failure, server not running) withdraws a shown
+  reminder and starts over at the next pause.
+- Changing the setting while paused counts from the pause start (or the last
+  reminder); if that is already past, the reminder shows at once. 0 = off
+  (withdraws a shown reminder).
+- **Counting caveat:** the server doesn't report when a pause started, so the
+  extension counts from the first status poll that saw "paused" (up to one
+  idle poll, default 10 s, late). A pause that began before the extension
+  started (login, shell restart, re-enable) counts from then. A resume and
+  re-pause between two polls isn't seen, so it counts as one pause. A failed
+  poll other than "not running" (e.g. a timeout) keeps the count. Time is
+  measured on the monotonic clock, so time spent suspended is not counted.
 
 ## Active window (time accounting)
 
@@ -58,7 +86,7 @@ name, the WM class and the window title, or "no focused window".
 - The token is never stored in dconf/GSettings and never logged; error
   messages never include it. Settings hold only poll intervals, the preferred
   microphone's opaque id and label, the indicator toggle, the active-window
-  switch and the excluded app ids.
+  switch, the excluded app ids and the pause-reminder delay.
 - Requests carry `Authorization: Bearer …` and no `Origin`, `Cookie` or
   `Sec-Fetch-*` headers (the API refuses browser-shaped requests).
 - Microphone capture is only offered when the server was started with
@@ -82,6 +110,7 @@ name, the WM class and the window title, or "no focused window".
 | `show-mic-indicator` | true | microphone icon in the top bar while it is on |
 | `report-active-window` | true | report the focused window while recording (server needs `--window-activity`) |
 | `window-title-excluded-apps` | empty | app ids (with or without `.desktop`) whose titles are sent empty; comma-separated in Settings |
+| `pause-reminder-minutes` | 10 | notify after this many minutes paused, then every this many minutes; 0 = off (0..240) |
 
 ## Develop
 
@@ -108,7 +137,10 @@ validation), so it is unit-tested with plain `gjs -m`. Likewise
 `lib/window_model.js` holds the active-window rules (payload, sanitising,
 debounce/spacing/retry scheduler on an injected clock, availability gating,
 the focused window's signal bookkeeping) and `lib/window_tracker.js` only
-connects the Shell signals and GLib timers to it. `lib/client.js`
+connects the Shell signals and GLib timers to it. `lib/pause_reminder.js`
+holds the pause reminder's rules (paused-since, due time, repeats, withdraw,
+"Stop reminding", texts) on an injected clock; `extension.js` arms one GLib
+timeout for its next due time and shows the notification. `lib/client.js`
 (libsoup 3) is tested against `tests/fake_control.js`, a Soup.Server fake that
 enforces the contract's request rules. `extension.js`/`prefs.js` only run
 inside GNOME Shell.

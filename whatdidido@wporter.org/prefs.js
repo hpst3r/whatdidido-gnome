@@ -80,6 +80,19 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         ids.push(settings.connect('changed::window-title-excluded-apps', syncExcluded));
         syncExcluded();
 
+        const reminders = new Adw.PreferencesGroup({
+            title: 'Reminders',
+            description: 'Counted from when the extension first saw the pause.',
+        });
+        page.add(reminders);
+        const pauseReminder = new Adw.SpinRow({
+            title: 'Remind while paused (minutes)',
+            subtitle: 'A notification after this long paused, then again every this many minutes; 0 = off',
+            adjustment: new Gtk.Adjustment({lower: 0, upper: 240, step_increment: 1, page_increment: 10}),
+        });
+        settings.bind('pause-reminder-minutes', pauseReminder, 'value', Gio.SettingsBindFlags.DEFAULT);
+        reminders.add(pauseReminder);
+
         window.connect('close-request', () => {
             for (const id of ids)
                 settings.disconnect(id);

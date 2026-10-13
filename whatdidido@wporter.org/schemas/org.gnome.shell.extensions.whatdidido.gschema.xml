@@ -37,5 +37,11 @@
       <summary>Apps whose window titles are never sent</summary>
       <description>Desktop app ids (with or without the .desktop suffix, e.g. org.keepassxc.KeePassXC). Their windows are reported with an empty title.</description>
     </key>
+    <key name="pause-reminder-minutes" type="u">
+      <range min="0" max="240"/>
+      <default>10</default>
+      <summary>Remind after being paused this long (minutes)</summary>
+      <description>While the work session stays paused, show a notification after this many minutes and again every this many minutes. Counted from when the extension first saw the pause. 0 = no reminders.</description>
+    </key>
   </schema>
 </schemalist>
