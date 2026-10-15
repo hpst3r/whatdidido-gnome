@@ -13,15 +13,20 @@
       <summary>Poll interval while idle (seconds)</summary>
       <description>Used while the session is stopped, paused or failed, or the server is not running.</description>
     </key>
+    <key name="microphone-stable-id" type="s">
+      <default>''</default>
+      <summary>Chosen microphone (stable id)</summary>
+      <description>The chosen microphone's stable id from the server's microphone list (PipeWire node name); it survives reconnects. Empty = none chosen. The microphone is only ever turned on with the chosen one; if it is not connected the microphone stays off.</description>
+    </key>
     <key name="microphone-id" type="s">
       <default>''</default>
-      <summary>Preferred microphone id</summary>
-      <description>Opaque id from the server's microphone list. Empty, or not currently present, = the first microphone.</description>
+      <summary>Chosen microphone id (legacy)</summary>
+      <description>The chosen microphone's opaque id from the server's microphone list. It changes when the device reconnects, so it is only used when no stable id is saved (older servers, or before migration). Empty, or not currently present, = no microphone; there is no fallback to another one.</description>
     </key>
     <key name="microphone-label" type="s">
       <default>''</default>
-      <summary>Label of the preferred microphone</summary>
-      <description>Display only; stored when the microphone is chosen in the menu.</description>
+      <summary>Label of the chosen microphone</summary>
+      <description>Stored when the microphone is chosen in the menu; shown in messages such as "… is not connected".</description>
     </key>
     <key name="show-mic-indicator" type="b">
       <default>true</default>

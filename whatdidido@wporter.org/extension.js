@@ -11,7 +11,8 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {ControlClient} from './lib/client.js';
-import {buildView, errorText, micSourceItems, pageUrl, pollPeriod} from './lib/model.js';
+import {MicController} from './lib/mic_model.js';
+import {buildView, errorText, pageUrl, pollPeriod} from './lib/model.js';
 import {PauseReminder, REMINDER_TITLE, timerDelay} from './lib/pause_reminder.js';
 import {windowSwitchView} from './lib/window_model.js';
 import {WindowTracker} from './lib/window_tracker.js';
@@ -43,7 +44,6 @@ class Indicator extends PanelMenu.Button {
         this._notice = null;        // last failed action, shown in the menu
         this._noticeSeen = false;
         this._lastLogged = null;
-        this._mics = null;
         this._intervalKey = '';
         this._syncing = false;
         this._destroyed = false;
@@ -52,6 +52,20 @@ class Indicator extends PanelMenu.Button {
         this._reminderSource = null;
         this._reminderNotification = null;
         this._resumeLogged = null;
+        this._reopenMenuId = 0;     // 'menu-closed' handler showing the source list again
+        this._reopenIdleId = 0;
+        this._mic = new MicController({
+            settings: {
+                get: key => this._settings.get_string(key),
+                set: (key, value) => this._settings.set_string(key, value),
+            },
+            setMicOn: (on, preferred, c) => this._client.setMicOn(on, preferred, c),
+            openSources: () => this._openMicSources(),
+            changed: () => {
+                this._render();
+                this._renderMics();
+            },
+        });
 
         const box = new St.BoxLayout({style_class: 'panel-status-indicators-box wdi-panel-box'});
         this._stateIcon = new St.Icon({
@@ -80,7 +94,11 @@ class Indicator extends PanelMenu.Button {
             this._settings.connect('changed::poll-active', () => this._schedule()),
             this._settings.connect('changed::poll-idle', () => this._schedule()),
             this._settings.connect('changed::show-mic-indicator', () => this._render()),
-            this._settings.connect('changed::microphone-id', () => this._renderMics()),
+            ...['microphone-stable-id', 'microphone-id', 'microphone-label'].map(key =>
+                this._settings.connect(`changed::${key}`, () => {
+                    this._render();
+                    this._renderMics();
+                })),
             this._settings.connect('changed::report-active-window', () => this._render()),
             this._settings.connect('changed::pause-reminder-minutes', () => this._applyReminder(
                 this._reminder.setMinutes(this._settings.get_uint('pause-reminder-minutes'), monotonicMs()))),
@@ -90,6 +108,9 @@ class Indicator extends PanelMenu.Button {
                 this._refresh();
                 this._loadMics();
             } else {
+                // Not when the switch's own close is about to show the source list.
+                if (!this._reopenMenuId)
+                    this._mic.menuClosed();
                 if (this._noticeSeen)
                     this._notice = null;
                 this._noticeSeen = false;
@@ -132,6 +153,10 @@ class Indicator extends PanelMenu.Button {
                 this._setMic(on);
         });
         this.menu.addMenuItem(this._micItem);
+        // Why the mic is off: "Choose a microphone", "<label> is not connected".
+        this._micHintItem = new PopupMenu.PopupMenuItem('', {reactive: false});
+        this._micHintItem.label.add_style_class_name('wdi-error');
+        this.menu.addMenuItem(this._micHintItem);
         this._micSourceMenu = new PopupMenu.PopupSubMenuMenuItem('Microphone source');
         this.menu.addMenuItem(this._micSourceMenu);
         this._intervalMenu = new PopupMenu.PopupSubMenuMenuItem('Screenshot interval');
@@ -195,6 +220,7 @@ class Indicator extends PanelMenu.Button {
         if (observed)
             this._applyReminder(this._reminder.observe(this._running ? this._status.state : null, monotonicMs()));
         this._windowTracker.updateStatus(this._status, this._running);
+        this._mic.updateStatus(this._status, this._running);
         this._render();
         this._schedule();
     }
@@ -311,22 +337,52 @@ class Indicator extends PanelMenu.Button {
         notification?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
     }
 
+    // User actions only: the switch and the source submenu. Polling never
+    // sends a mic request.
     _setMic(on) {
-        this._act(c => this._client.setMicOn(on, this._settings.get_string('microphone-id'), c))
-            .finally(() => this._loadMics());
+        this._act(c => this._mic.toggle(on, c)).finally(() => this._loadMics());
     }
 
     _setInterval(seconds) {
         this._act(c => this._client.setInterval(seconds, c));
     }
 
-    _chooseMic(mic) {
-        this._settings.set_string('microphone-label', mic.label);
-        this._settings.set_string('microphone-id', mic.id);
-        // Switch a live microphone over to the new choice.
-        const live = this._status?.mic;
-        if (this._running && live?.on && live.source_id !== mic.id)
-            this._setMic(true);
+    // Saves the choice; turns the mic on after "Choose a microphone", or
+    // switches a live microphone over to another device.
+    _chooseMic(item) {
+        this._act(c => this._mic.choose(item, c)).finally(() => this._loadMics());
+    }
+
+    // Turning the switch on without a saved choice. Activating the switch
+    // item closes the menu (space on the keyboard does not), so show the menu
+    // again once it has closed, with the source list open.
+    _openMicSources() {
+        if (this._destroyed || this._reopenMenuId)
+            return;
+        this._reopenMenuId = this.menu.connect('menu-closed', () => {
+            this._cancelReopen();
+            if (!this._destroyed) {
+                this.menu.open();
+                this._micSourceMenu.setSubmenuShown(true);
+            }
+        });
+        this._reopenIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._reopenIdleId = 0;
+            if (this.menu.isOpen) {
+                this._cancelReopen();
+                this._micSourceMenu.setSubmenuShown(true);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _cancelReopen() {
+        if (this._reopenMenuId)
+            this.menu.disconnect(this._reopenMenuId);
+        this._reopenMenuId = 0;
+        if (this._reopenIdleId)
+            GLib.source_remove(this._reopenIdleId);
+        this._reopenIdleId = 0;
     }
 
     _open(path) {
@@ -342,18 +398,19 @@ class Indicator extends PanelMenu.Button {
         if (this._destroyed)
             return;
         if (!this._running || !this._status?.mic?.available) {
-            this._mics = null;
-            this._renderMics();
+            this._mic.setInventory(null);
             return;
         }
+        let mics;
         try {
-            this._mics = (await this._client.microphones(this._actionCancellable)).microphones ?? [];
+            mics = (await this._client.microphones(this._actionCancellable)).microphones ?? [];
         } catch (e) {
             if (isCancelled(e) || this._destroyed)
                 return;
-            this._mics = null;
+            mics = null;
         }
-        this._renderMics();
+        if (!this._destroyed)
+            this._mic.setInventory(mics);  // also migrates a legacy microphone-id
     }
 
     _render() {
@@ -399,6 +456,10 @@ class Indicator extends PanelMenu.Button {
             this._syncing = false;
         }
         this._micItem.setSensitive(view.mic.sensitive);
+        const micView = this._mic.view();
+        this._micItem.label.text = micView.switchLabel;
+        this._micHintItem.label.text = micView.hint ?? '';
+        this._micHintItem.visible = !!micView.hint;
         this._windowItem.label.text = windowView.label;
         this._windowItem.setSensitive(windowView.sensitive);
         this._micSourceMenu.visible = view.running && this._status.mic?.available === true;
@@ -427,10 +488,10 @@ class Indicator extends PanelMenu.Button {
         if (this._destroyed)
             return;
         this._micSourceMenu.menu.removeAll();
-        const items = micSourceItems(this._mics, this._settings.get_string('microphone-id'));
+        const items = this._mic.view().sources;
         if (!items.length) {
             this._micSourceMenu.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-                this._mics ? 'No microphones found' : 'Microphones unavailable', {reactive: false}));
+                this._mic.mics ? 'No microphones found' : 'Microphones unavailable', {reactive: false}));
             return;
         }
         for (const item of items) {
@@ -443,6 +504,7 @@ class Indicator extends PanelMenu.Button {
 
     destroy() {
         this._destroyed = true;
+        this._cancelReopen();
         this._windowTracker.destroy();
         if (this._timer)
             GLib.source_remove(this._timer);

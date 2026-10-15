@@ -12,7 +12,9 @@ session. It talks to the work-session server's local control API
   (while paused, prefixed with how long: "Paused for 12 min", "<1 min" under
   a minute);
   Start / Pause / Resume / Stop (only those allowed in the current state);
-  a **Microphone** switch; **Microphone source** (remembered in settings);
+  a **Microphone** switch, labeled with the microphone the session actually
+  uses and its trouble ("Microphone: USB headset (waiting for device)");
+  **Microphone source** (the saved choice is checked);
   **Screenshot interval** (5/10/30/60 s, current one marked); **Record active
   window**; Open session page; Open day view; the session's last error, if
   any; Settings.
@@ -21,6 +23,26 @@ Polling: every 2 s while the menu is open or the session is starting,
 recording, reconnecting or stopping, otherwise every 10 s (both configurable);
 also on menu open. When the server isn't running the icon shows that and the
 menu says "whatdidido not running"; nothing is logged for it.
+
+## Microphone choice
+
+The extension never picks a microphone you did not choose (issue #1).
+
+- The choice is saved by its stable id (PipeWire node name, from servers that
+  report `stable_id`), so a USB microphone that reconnects with a new id
+  (dock, suspend) is still found. Older servers: the saved id is used.
+- No saved choice: turning the switch on sends nothing; the menu says "Choose
+  a microphone" and opens **Microphone source**. Picking one saves it and
+  turns the microphone on.
+- Saved choice not connected: the switch stays off and the menu says
+  "USB headset is not connected". No other microphone is used.
+- Picking another source while the microphone is on switches over to it.
+- A microphone started elsewhere (e.g. the session page) is shown as the
+  active one; it doesn't change the saved choice.
+- Status polling never turns the microphone on or off.
+- Choices saved before stable ids are migrated the first time the menu sees
+  that microphone; if it is not connected then, it counts as not chosen.
+- **Settings → Forget microphone** clears the choice.
 
 ## Pause reminder
 
@@ -84,8 +106,8 @@ name, the WM class and the window title, or "no focused window".
   a loopback `http://127.0.0.1:<port>` / `http://[::1]:<port>` URL from it, so
   the token is never sent anywhere else.
 - The token is never stored in dconf/GSettings and never logged; error
-  messages never include it. Settings hold only poll intervals, the preferred
-  microphone's opaque id and label, the indicator toggle, the active-window
+  messages never include it. Settings hold only poll intervals, the chosen
+  microphone's stable id, opaque id and label, the indicator toggle, the active-window
   switch, the excluded app ids and the pause-reminder delay.
 - Requests carry `Authorization: Bearer …` and no `Origin`, `Cookie` or
   `Sec-Fetch-*` headers (the API refuses browser-shaped requests).
@@ -105,8 +127,9 @@ name, the WM class and the window title, or "no focused window".
 |---|---|---|
 | `poll-active` | 2 s | menu open, or starting/recording/reconnecting/stopping |
 | `poll-idle` | 10 s | stopped/paused/failed/not running |
-| `microphone-id` | empty | chosen in the menu; empty or missing = first microphone |
-| `microphone-label` | empty | display only |
+| `microphone-stable-id` | empty | chosen in the menu (stable across reconnects); empty = none chosen |
+| `microphone-id` | empty | chosen microphone's opaque id; only used without a stable id; never a fallback to another microphone |
+| `microphone-label` | empty | chosen microphone's name, for messages |
 | `show-mic-indicator` | true | microphone icon in the top bar while it is on |
 | `report-active-window` | true | report the focused window while recording (server needs `--window-activity`) |
 | `window-title-excluded-apps` | empty | app ids (with or without `.desktop`) whose titles are sent empty; comma-separated in Settings |
@@ -132,8 +155,10 @@ untouched. It needs `mutter-devkit` (GNOME 49+). The nested shell shares
 `$XDG_RUNTIME_DIR`, so it controls the real running server.
 
 `lib/model.js` is pure JS (no GI) holding every decision (icons, labels,
-allowed actions, header text, microphone choice, poll period, control-file
-validation), so it is unit-tested with plain `gjs -m`. Likewise
+allowed actions, header text, poll period, control-file validation), so it is
+unit-tested with plain `gjs -m`. `lib/mic_model.js` likewise holds the
+microphone choice (matching, migration, the menu's texts and the
+`MicController` behind the switch and the source submenu). Likewise
 `lib/window_model.js` holds the active-window rules (payload, sanitising,
 debounce/spacing/retry scheduler on an injected clock, availability gating,
 the focused window's signal bookkeeping) and `lib/window_tracker.js` only

@@ -2,9 +2,10 @@
 import {
     STATES, INTERVAL_CHOICES, NOT_RUNNING_TEXT,
     allowedActions, panelState, stateLabel, formatInterval, headerText,
-    intervalItems, chooseMicrophone, micSourceItems, micSwitch, micRequest,
+    intervalItems, micSwitch,
     pollPeriod, parseControlFile, pageUrl, lastErrorText, errorText, buildView,
 } from '../whatdidido@wporter.org/lib/model.js';
+import {chooseMicrophone, micRequest, micSourceItems} from '../whatdidido@wporter.org/lib/mic_model.js';
 
 let failed = 0;
 function eq(name, got, want) {
@@ -95,21 +96,24 @@ eq('interval unknown current marks nothing', intervalItems(null).filter(i => i.c
 eq('interval items are not shared', intervalItems(5) !== intervalItems(5), true);
 
 // --- microphone choice ---------------------------------------------------
+// Explicit choice only (issue #1); tests/mic_model_test.js has the full policy.
 const mics = [{id: 'm1', label: 'Built-in'}, {id: 'm2', label: 'USB headset'}];
-eq('preferred mic present', chooseMicrophone(mics, 'm2'), 'm2');
-eq('preferred mic gone -> first', chooseMicrophone(mics, 'gone'), 'm1');
-eq('no preference -> first', chooseMicrophone(mics, ''), 'm1');
-eq('no mics -> null', chooseMicrophone([], 'm1'), null);
-eq('null list -> null', chooseMicrophone(null, ''), null);
-eq('source items radio', micSourceItems(mics, 'm2'), [
-    {id: 'm1', label: 'Built-in', checked: false}, {id: 'm2', label: 'USB headset', checked: true}]);
-eq('source items default marks effective', micSourceItems(mics, '').map(i => i.checked), [true, false]);
-eq('source items label fallback', micSourceItems([{id: 'x', label: ''}], '')[0].label, 'x');
+const legacy = id => ({stableId: '', id, label: ''});
+eq('preferred mic present', chooseMicrophone(mics, legacy('m2'))?.id, 'm2');
+eq('preferred mic gone -> null (no fallback)', chooseMicrophone(mics, legacy('gone')), null);
+eq('no preference -> null (no fallback)', chooseMicrophone(mics, legacy('')), null);
+eq('no mics -> null', chooseMicrophone([], legacy('m1')), null);
+eq('null list -> null', chooseMicrophone(null, legacy('')), null);
+eq('source items radio', micSourceItems(mics, legacy('m2')), [
+    {id: 'm1', stableId: '', label: 'Built-in', checked: false}, {id: 'm2', stableId: '', label: 'USB headset', checked: true}]);
+eq('source items without a preference mark nothing', micSourceItems(mics, legacy('')).map(i => i.checked), [false, false]);
+eq('source items label fallback', micSourceItems([{id: 'x', label: ''}], legacy(''))[0].label, 'x');
 
-eq('mic request off', micRequest(false, mics, 'm2', 'inv1'), {on: false});
-eq('mic request on preferred', micRequest(true, mics, 'm2', 'inv1'), {on: true, source_id: 'm2', inventory: 'inv1'});
-eq('mic request on default', micRequest(true, mics, '', 'inv1'), {on: true, source_id: 'm1', inventory: 'inv1'});
-eq('mic request no mics', micRequest(true, [], '', 'inv1'), null);
+eq('mic request off', micRequest(false, mics, legacy('m2'), 'inv1'), {on: false});
+eq('mic request on preferred', micRequest(true, mics, legacy('m2'), 'inv1'), {on: true, source_id: 'm2', inventory: 'inv1'});
+eq('mic request without a preference -> null', micRequest(true, mics, legacy(''), 'inv1'), null);
+eq('mic request preferred gone -> null', micRequest(true, mics, legacy('gone'), 'inv1'), null);
+eq('mic request no mics', micRequest(true, [], legacy('m1'), 'inv1'), null);
 
 const st = (state, mic) => ({state, mic});
 eq('mic switch available', micSwitch(st('recording', {available: true, on: true, source_id: 'm1'}), true), {sensitive: true, on: true});
@@ -167,6 +171,8 @@ eq('err unavailable', errorText({status: 409, code: 'unavailable'}), 'Microphone
 eq('err forbidden', errorText({status: 403, code: 'forbidden'}), 'Control token rejected');
 eq('err failed', errorText({status: 500, code: 'failed'}), 'The command failed');
 eq('err invalid', errorText({status: 400, code: 'invalid'}), 'Request rejected as invalid');
+eq('err microphone missing names it', errorText({code: 'microphone_missing', message: 'USB headset is not connected'}), 'USB headset is not connected');
+eq('err microphone unset', errorText({code: 'microphone_unset', message: 'x'}), 'Choose a microphone');
 eq('err other http', errorText({status: 502, code: null}), 'HTTP 502');
 eq('err plain', errorText(new Error('boom')), 'boom');
 

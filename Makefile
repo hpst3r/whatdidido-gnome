@@ -10,6 +10,7 @@ TEST_RUNTIME ?= $(CURDIR)/build/test-runtime
 # Unit tests (pure models) + client tests against a loopback fake control API.
 test:
 	gjs -m tests/model_test.js
+	gjs -m tests/mic_model_test.js
 	gjs -m tests/pause_reminder_test.js
 	gjs -m tests/window_model_test.js
 	gjs -m tests/window_retry_test.js
@@ -18,6 +19,7 @@ test:
 	gjs -m tests/window_log_once_test.js
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
+	gjs -m tests/mic_scenarios_test.js $(TEST_RUNTIME)/mic-scenarios
 
 # Read-only check against the running server (control.json in $XDG_RUNTIME_DIR).
 live:

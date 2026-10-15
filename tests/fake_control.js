@@ -47,6 +47,11 @@ export class FakeControl {
         this.requests = [];
         this.onStaleToken = null;     // (request) => void, called before a 403 for a wrong token
         this.inventoryChanges = 0;    // POST /mic answers inventory_changed this many times
+        this.beforeMicPost = null;    // (body) => void, e.g. re-enumerate devices between GET and POST
+        // whatdidido RELIABILITY.md section 7: microphones carry `stable_id`;
+        // the status mic object adds stable_id, label, state, remembered.
+        // false mimics an older server without them (stable_id is stripped).
+        this.micDetails = false;
         this.status = {
             state: 'recording', monitors: 1, samples: 4, interval_seconds: 30,
             last_error: null, reason: null,
@@ -126,7 +131,7 @@ export class FakeControl {
         case 'GET /control/v1/status':
             return this._reply(msg, 200, this.windowActivity ? {...this.status, window_activity: this._windowStatus()} : this.status);
         case 'GET /control/v1/microphones':
-            return this._reply(msg, 200, {inventory: this.inventory, microphones: this.mics});
+            return this._reply(msg, 200, {inventory: this.inventory, microphones: this._micList()});
         case 'POST /control/v1/command': {
             const allowed = {start: ['stopped', 'failed'], pause: ['recording'], resume: ['paused'],
                 stop: ['starting', 'recording', 'paused', 'recovering']}[body.action];
@@ -139,8 +144,9 @@ export class FakeControl {
                 this.forgetWindow();  // pause, resume and start forget the last window
             return this._reply(msg, 202, {state: this.status.state});
         }
-        case 'POST /control/v1/mic':
+        case 'POST /control/v1/mic': {
             if (body.on) {
+                this.beforeMicPost?.(body);
                 if (this.inventoryChanges > 0) {
                     // A device appeared between the client's GET and POST.
                     this.inventoryChanges--;
@@ -151,8 +157,18 @@ export class FakeControl {
                 if (!this.mics.some(m => m.id === body.source_id))
                     return this._reply(msg, 400, {error: 'invalid'});
             }
-            this.status.mic = {available: true, on: body.on, source_id: body.on ? body.source_id : null};
+            const mic = body.on ? this.mics.find(m => m.id === body.source_id) : null;
+            this.status.mic = {available: true, on: body.on, source_id: mic ? mic.id : null};
+            if (this.micDetails) {
+                Object.assign(this.status.mic, {
+                    stable_id: mic?.stable_id ?? null,
+                    label: mic?.label ?? null,
+                    state: !mic ? 'off' : this.status.state === 'recording' ? 'capturing' : 'pending',
+                    remembered: false,
+                });
+            }
             return this._reply(msg, 200, {mic: this.status.mic});
+        }
         case 'POST /control/v1/interval':
             if (!Number.isInteger(body.seconds) || body.seconds < 5 || body.seconds > 3600)
                 return this._reply(msg, 400, {error: 'invalid'});
@@ -168,6 +184,12 @@ export class FakeControl {
         default:
             return this._reply(msg, 404, {error: 'not_found'});
         }
+    }
+
+    _micList() {
+        if (this.micDetails)
+            return this.mics.map(m => ({stable_id: null, ...m}));
+        return this.mics.map(({stable_id: _, ...m}) => m);
     }
 
     _windowStatus() {
