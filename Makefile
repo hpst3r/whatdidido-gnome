@@ -11,6 +11,8 @@ TEST_RUNTIME ?= $(CURDIR)/build/test-runtime
 test:
 	gjs -m tests/model_test.js
 	gjs -m tests/mic_model_test.js
+	gjs -m tests/mic_review_forget_test.js
+	gjs -m tests/mic_review_indicator_test.js
 	gjs -m tests/pause_reminder_test.js
 	gjs -m tests/window_model_test.js
 	gjs -m tests/window_retry_test.js
@@ -20,6 +22,7 @@ test:
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
 	gjs -m tests/mic_scenarios_test.js $(TEST_RUNTIME)/mic-scenarios
+	gjs -m tests/mic_review_toggle_race_test.js $(TEST_RUNTIME)/mic-toggle-race
 
 # Read-only check against the running server (control.json in $XDG_RUNTIME_DIR).
 live:

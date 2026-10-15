@@ -112,6 +112,14 @@ export function micSwitch(status, running) {
     };
 }
 
+// mic.state in which nothing is or will be captured although mic.on is true
+// (RELIABILITY.md section 4): no live-microphone cue in the top bar.
+const MIC_DEAD_STATES = ['limit_reached', 'failed'];
+
+function micLive(status, running) {
+    return running && status.mic?.on === true && !MIC_DEAD_STATES.includes(status.mic.state);
+}
+
 const BUSY = ['starting', 'recording', 'recovering', 'stopping'];
 
 export function pollPeriod(state, menuOpen, fast = 2, slow = 10) {
@@ -190,14 +198,17 @@ export function buildView(status, {running = true, showMic = true, pollError = n
     running = running && !!status;
     const state = running ? status.state : null;
     const mic = micSwitch(status, running);
+    const live = micLive(status, running);
+    const panel = panelState(state, running);
     const header = running ? headerText(status) : {title: NOT_RUNNING_TEXT, detail: pollError ?? ''};
     if (state === 'paused' && pausedMs !== null)
         header.detail = `${pausedForText(pausedMs)} · ${header.detail}`;
     return {
         running,
         state,
-        panel: panelState(state, running),
-        micIndicator: running && showMic && status.mic?.on === true,
+        panel,
+        micIndicator: live && showMic,
+        accessibleName: `whatdidido: ${panel.label}${live ? ', microphone on' : ''}`,
         header,
         actions: allowedActions(state),
         mic,

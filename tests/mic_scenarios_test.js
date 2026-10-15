@@ -43,6 +43,7 @@ async function main() {
                 store[k] = v;
             }},
             setMicOn: (on, preferred, c) => client.setMicOn(on, preferred, c),
+            readStatus: c => client.status(c),
             openSources: () => ext.opened++,
         });
         ext.poll = async () => ext.ctl.updateStatus(await client.status(null), true);
@@ -153,6 +154,34 @@ async function main() {
         fake.requests = [];
         eq('old server: stale legacy id -> missing, no fallback', await ext.ctl.toggle(true, null), 'missing');
         eq('old server: nothing posted', posts(), []);
+    }
+
+    // --- stale poll: the session page turned the mic off since; a pick only saves ------
+    {
+        reset([BUILTIN, USB('202')]);
+        const ext = extension({'microphone-stable-id': 'usb-x', 'microphone-id': '202', 'microphone-label': 'USB headset'});
+        await ext.openMenu();
+        eq('stale: on', await ext.ctl.toggle(true, null), 'on');
+        await ext.poll();
+        fake.status.mic = {available: true, on: false, source_id: null, stable_id: null, label: null, state: 'off', remembered: false};
+        fake.requests = [];
+        eq('stale: pick the built-in -> saved', await ext.ctl.choose(ext.ctl.view().sources[0], null), 'saved');
+        eq('stale: fresh status read, nothing posted', [fake.requests.filter(r => r.path === '/control/v1/status').length, posts()], [1, []]);
+        eq('stale: choice saved, mic still off', [ext.store['microphone-stable-id'], fake.status.mic.on], ['pci-builtin', false]);
+    }
+
+    // --- starting / stopping: a pick only saves ----------------------------------------
+    for (const state of ['starting', 'stopping']) {
+        reset([BUILTIN, USB('202')]);
+        const ext = extension({'microphone-stable-id': 'usb-x', 'microphone-id': '202', 'microphone-label': 'USB headset'});
+        await ext.openMenu();
+        await ext.ctl.toggle(true, null);
+        fake.status.state = state;
+        await ext.poll();
+        fake.requests = [];
+        eq(`${state}: pick another device while on -> saved`, await ext.ctl.choose(ext.ctl.view().sources[0], null), 'saved');
+        eq(`${state}: nothing posted`, posts(), []);
+        fake.status.state = 'recording';
     }
 
     // --- polling never sends a mic request --------------------------------------------

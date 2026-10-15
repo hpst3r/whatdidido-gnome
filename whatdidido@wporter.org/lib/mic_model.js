@@ -53,11 +53,13 @@ export function chooseMicrophone(mics, preferred) {
     return valid.find(m => m.id === p.id && (!p.label || !m.label || m.label === p.label)) ?? null;
 }
 
-// Migration on an inventory read: only microphone-id is saved and that
-// microphone is present with a stable id -> the stable id to store, else null.
+// Migration on an inventory read: only microphone-id and its label are saved
+// and that microphone is present with a stable id -> the stable id to store,
+// else null. A half-cleared choice (prefs' Forget writes one key at a time)
+// never adopts a stable id again.
 export function migrateStableId(mics, preferred) {
     const p = preferredMic(preferred);
-    if (p.stableId || !p.id)
+    if (p.stableId || !p.id || !p.label)
         return null;
     return stableIdOf(chooseMicrophone(mics, p)) || null;
 }
@@ -129,17 +131,28 @@ export function liveSwitchNeeded(liveMic, running, item) {
     return liveMic.source_id !== item.id;
 }
 
+// Session states in which a pick only saves the choice (the switch is
+// insensitive then too; model.js MIC_STATES).
+const TRANSIENT_STATES = ['starting', 'stopping'];
+
 // The menu's microphone decisions. Only toggle() and choose() (user actions)
-// ever call setMicOn; status updates and inventory reads never do.
+// ever call setMicOn; status updates and inventory reads never do. Their
+// requests run one after another, and the last intent wins: an on that a
+// later off superseded is not sent.
 //   settings: {get(key) -> string, set(key, value)} over MIC_KEYS
 //   setMicOn(on, preferred, cancellable): ControlClient.setMicOn
+//   readStatus(cancellable): ControlClient.status, read before a pick decides
 //   openSources(): show the source submenu; changed(): re-render
 export class MicController {
-    constructor({settings, setMicOn, openSources = () => {}, changed = () => {}}) {
+    constructor({settings, setMicOn, readStatus, openSources = () => {}, changed = () => {}}) {
         this._settings = settings;
         this._setMicOn = setMicOn;
+        this._readStatus = readStatus;
         this._openSources = openSources;
         this._changed = changed;
+        this._queue = Promise.resolve();
+        this._seq = 0;          // numbers each toggle/choose
+        this._lastOff = 0;      // the latest toggle(false)
         this.mics = null;       // last inventory, or null when unknown
         this.status = null;
         this.running = false;
@@ -176,21 +189,42 @@ export class MicController {
         this.prompt = false;
     }
 
+    // Runs fn once every earlier request has finished.
+    _serial(fn) {
+        const run = this._queue.then(fn);
+        this._queue = run.catch(() => {});
+        return run;
+    }
+
+    _intent(on) {
+        const seq = ++this._seq;
+        if (!on)
+            this._lastOff = seq;
+        return seq;
+    }
+
     // The switch. Resolves to 'choose' (no saved choice: nothing sent),
-    // 'missing' (saved choice not connected: nothing sent), 'on' or 'off'.
-    // Other failures reject (shown as the menu's notice).
+    // 'missing' (saved choice not connected: nothing sent), 'superseded' (a
+    // later off came first: nothing sent), 'on' or 'off'. Other failures
+    // reject (shown as the menu's notice).
     async toggle(on, cancellable) {
-        const preferred = this.preferred;
+        const seq = this._intent(on);
         this.missing = false;
-        if (on && !hasMicChoice(preferred)) {
+        if (on && !hasMicChoice(this.preferred)) {
             this.prompt = true;
             this._changed();
             this._openSources();
             return 'choose';
         }
         this.prompt = false;
+        return this._serial(() => this._send(on, seq, cancellable));
+    }
+
+    async _send(on, seq, cancellable) {
+        if (on && this._lastOff > seq)
+            return 'superseded';
         try {
-            await this._setMicOn(on, preferred, cancellable);
+            await this._setMicOn(on, this.preferred, cancellable);
         } catch (e) {
             if (e?.code !== 'microphone_missing')
                 throw e;
@@ -205,16 +239,27 @@ export class MicController {
 
     // A source picked in the submenu: save it; turn the mic on when the user
     // was asked to choose, or switch a live microphone to another device.
+    // Decided from a fresh status (the last poll may predate a change on the
+    // session page); while starting or stopping it only saves.
     async choose(item, cancellable) {
-        const turnOn = this.prompt || liveSwitchNeeded(this.status?.mic, this.running, item);
+        const seq = this._intent(true);
+        const prompt = this.prompt;
         this._settings.set(MIC_KEYS.stableId, str(item.stableId));
         this._settings.set(MIC_KEYS.label, str(item.label));
         this._settings.set(MIC_KEYS.id, str(item.id));
         this.prompt = this.missing = false;
         this._changed();
-        if (!turnOn)
-            return 'saved';
-        return this.toggle(true, cancellable);
+        return this._serial(async () => {
+            if (this._lastOff > seq)
+                return 'saved';
+            const status = await this._readStatus(cancellable);
+            this.updateStatus(status, true);
+            if (TRANSIENT_STATES.includes(status?.state))
+                return 'saved';
+            if (!prompt && !liveSwitchNeeded(status?.mic, true, item))
+                return 'saved';
+            return this._send(true, seq, cancellable);
+        });
     }
 
     view() {

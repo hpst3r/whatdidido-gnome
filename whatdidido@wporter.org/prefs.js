@@ -37,7 +37,9 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
                 'Only that microphone is ever turned on; if it is not connected the microphone stays off.',
         });
         page.add(mic);
-        const MIC_KEYS = ['microphone-stable-id', 'microphone-id', 'microphone-label'];
+        // Forget writes one key at a time: the stable id last, so the extension's
+        // migration never re-adopts it from a legacy id not yet cleared.
+        const MIC_KEYS = ['microphone-id', 'microphone-label', 'microphone-stable-id'];
         const preferred = new Adw.ActionRow({title: 'Chosen microphone'});
         const forget = new Gtk.Button({label: 'Forget microphone', valign: Gtk.Align.CENTER});
         forget.connect('clicked', () => {

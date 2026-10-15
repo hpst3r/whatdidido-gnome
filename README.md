@@ -6,8 +6,8 @@ session. It talks to the work-session server's local control API
 
 - **Top bar:** a state icon — recording (red record dot), paused, reconnecting,
   stopped, failed, or server not running — each with its own icon shape, plus a
-  small microphone icon while the microphone is on (can be turned off in
-  settings).
+  small microphone icon while the microphone is on and not stopped for good
+  (limit reached, failed); it can be turned off in settings.
 - **Menu:** the state in words and "N screenshots, every Xs, M monitors"
   (while paused, prefixed with how long: "Paused for 12 min", "<1 min" under
   a minute);
@@ -36,12 +36,16 @@ The extension never picks a microphone you did not choose (issue #1).
   turns the microphone on.
 - Saved choice not connected: the switch stays off and the menu says
   "USB headset is not connected". No other microphone is used.
-- Picking another source while the microphone is on switches over to it.
+- Picking another source while the microphone is on switches over to it
+  (decided from a fresh status; while the session is starting or stopping
+  the pick is only saved).
 - A microphone started elsewhere (e.g. the session page) is shown as the
   active one; it doesn't change the saved choice.
 - Status polling never turns the microphone on or off.
 - Choices saved before stable ids are migrated the first time the menu sees
-  that microphone; if it is not connected then, it counts as not chosen.
+  that microphone. After upgrading, a choice saved by an older version whose
+  device has since been renumbered (reconnect, reboot) must be picked again
+  once; until then the menu says it is not connected.
 - **Settings → Forget microphone** clears the choice.
 
 ## Pause reminder

@@ -60,6 +60,7 @@ eq('migrate: stable id already saved -> nothing', migrateStableId([BUILTIN, USB_
 eq('migrate: device without stable id -> nothing', migrateStableId([{id: '9', label: 'USB headset', stable_id: null}], pref('', '9')), null);
 eq('migrate: old server -> nothing', migrateStableId(OLD_SERVER, pref('', 'm2')), null);
 eq('migrate: unset -> nothing', migrateStableId([BUILTIN], pref('', '')), null);
+eq('migrate: legacy id without its label (half-cleared) -> nothing', migrateStableId([BUILTIN, USB_OLD], pref('', '101', '')), null);
 
 // --- source submenu: the checked item is the saved preference only -------------
 eq('items: reconnected preference checked', micSourceItems([BUILTIN, USB_NEW], pref('usb-x', '101')), [
@@ -120,9 +121,11 @@ eq('live: off -> no switch', liveSwitchNeeded({on: false, source_id: null}, true
 eq('live: not running -> no switch', liveSwitchNeeded({on: true, source_id: '7'}, false, item('202', 'usb-x')), false);
 
 // --- MicController: the menu's decisions, with a spy instead of the client ---------
-function harness(saved = {}, {reject = null} = {}) {
+// h.server: what a fresh GET /control/v1/status returns (default: the last poll).
+// hold: each setMicOn waits in h.pending until the test answers it.
+function harness(saved = {}, {reject = null, hold = false} = {}) {
     const store = {'microphone-stable-id': '', 'microphone-id': '', 'microphone-label': '', ...saved};
-    const h = {store, calls: [], opened: 0, changed: 0, writes: []};
+    const h = {store, calls: [], opened: 0, changed: 0, writes: [], server: undefined, reads: 0, pending: []};
     h.ctl = new MicController({
         settings: {get: k => store[k], set: (k, v) => {
             store[k] = v;
@@ -130,9 +133,15 @@ function harness(saved = {}, {reject = null} = {}) {
         }},
         setMicOn: async (on, preferred) => {
             h.calls.push([on, preferred]);
+            if (hold)
+                await new Promise(resolve => h.pending.push(resolve));
             if (reject)
                 throw reject;
             return {};
+        },
+        readStatus: async () => {
+            h.reads++;
+            return h.server === undefined ? h.ctl.status : h.server;
         },
         openSources: () => h.opened++,
         changed: () => h.changed++,
@@ -256,6 +265,68 @@ function harness(saved = {}, {reject = null} = {}) {
     const h = harness();
     eq('off without a choice -> off', await h.ctl.toggle(false, null), 'off');
     eq('off sent', h.calls.map(c => c[0]), [false]);
+}
+
+// Mic requests run one after another; the last user intent wins.
+{
+    const h = harness({'microphone-stable-id': 'usb-x', 'microphone-id': '202', 'microphone-label': 'USB headset'});
+    const [on, off] = [h.ctl.toggle(true, null), h.ctl.toggle(false, null)];
+    await Promise.all([on, off]);
+    eq('on then off at once: the on is not sent', h.calls.map(c => c[0]), [false]);
+    const results = await Promise.all([h.ctl.toggle(true, null), h.ctl.toggle(false, null), h.ctl.toggle(true, null)]);
+    eq('on, off, on: ends on', h.calls.slice(1).map(c => c[0]), [false, true]);
+    eq('on, off, on: results', results, ['superseded', 'off', 'on']);
+}
+{
+    const flush = async () => {
+        for (let i = 0; i < 10; i++)
+            await null;
+    };
+    const h = harness({'microphone-stable-id': 'usb-x', 'microphone-id': '202', 'microphone-label': 'USB headset'}, {hold: true});
+    const on = h.ctl.toggle(true, null);
+    await flush();
+    const off = h.ctl.toggle(false, null);
+    await flush();
+    eq('on in flight: the off waits for it', h.calls.map(c => c[0]), [true]);
+    h.pending.shift()();
+    await on;
+    await flush();
+    eq('on in flight: the off follows it', h.calls.map(c => c[0]), [true, false]);
+    h.pending.shift()();
+    eq('on in flight: results', [await on, await off], ['on', 'off']);
+}
+{
+    const h = harness({'microphone-stable-id': 'usb-x', 'microphone-id': '202', 'microphone-label': 'USB headset'});
+    h.ctl.setInventory([BUILTIN, USB_NEW]);
+    const results = await Promise.all([h.ctl.choose(item('7', 'pci-builtin'), null), h.ctl.toggle(false, null)]);
+    eq('pick then off at once: only off is sent', [results, h.calls.map(c => c[0])], [['saved', 'off'], [false]]);
+    eq('pick then off at once: the pick is still saved', h.store['microphone-stable-id'], 'pci-builtin');
+}
+// A pick decides from a fresh status, not the last poll.
+{
+    const h = harness({'microphone-stable-id': 'usb-x', 'microphone-id': '202', 'microphone-label': 'USB headset'});
+    h.ctl.setInventory([BUILTIN, USB_NEW]);
+    h.ctl.updateStatus(status({on: true, source_id: '202', stable_id: 'usb-x', label: 'USB headset', state: 'capturing'}), true);
+    h.server = status({on: false, source_id: null, state: 'off'});  // turned off on the session page since the poll
+    eq('stale poll says on, server says off: pick only saves', await h.ctl.choose(item('7', 'pci-builtin'), null), 'saved');
+    eq('stale poll: status read once, nothing sent', [h.reads, h.calls], [1, []]);
+    eq('stale poll: choice saved', h.store['microphone-stable-id'], 'pci-builtin');
+    h.ctl.updateStatus(OFF, true);
+    h.server = status({on: true, source_id: '202', stable_id: 'usb-x', label: 'USB headset', state: 'capturing'});
+    eq('stale poll says off, server says on with another device: pick switches', await h.ctl.choose(item('7', 'pci-builtin'), null), 'on');
+}
+// Starting / stopping: a pick only saves, even right after "Choose a microphone".
+for (const state of ['starting', 'stopping']) {
+    const h = harness({'microphone-stable-id': 'usb-x', 'microphone-id': '202', 'microphone-label': 'USB headset'});
+    h.ctl.setInventory([BUILTIN, USB_NEW]);
+    h.ctl.updateStatus(status({on: true, source_id: '202', stable_id: 'usb-x', label: 'USB headset', state: 'capturing'}, state), true);
+    eq(`${state}: pick another device while on -> saved only`, await h.ctl.choose(item('7', 'pci-builtin'), null), 'saved');
+    const u = harness();
+    u.ctl.updateStatus(OFF, true);
+    await u.ctl.toggle(true, null);
+    u.server = status({on: false, source_id: null}, state);
+    eq(`${state}: pick after "Choose a microphone" -> saved only`, await u.ctl.choose(item('7', 'pci-builtin'), null), 'saved');
+    eq(`${state}: nothing sent`, [h.calls, u.calls], [[], []]);
 }
 
 if (failed) {

@@ -60,6 +60,7 @@ class Indicator extends PanelMenu.Button {
                 set: (key, value) => this._settings.set_string(key, value),
             },
             setMicOn: (on, preferred, c) => this._client.setMicOn(on, preferred, c),
+            readStatus: c => this._client.status(c),
             openSources: () => this._openMicSources(),
             changed: () => {
                 this._render();
@@ -105,6 +106,12 @@ class Indicator extends PanelMenu.Button {
         ];
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open) {
+                // Reopened during the close animation of the switch's own
+                // close: 'menu-closed' never comes, so show the list now.
+                if (this._reopenMenuId) {
+                    this._cancelReopen();
+                    this._micSourceMenu.setSubmenuShown(true);
+                }
                 this._refresh();
                 this._loadMics();
             } else {
@@ -428,7 +435,7 @@ class Indicator extends PanelMenu.Button {
             this._stateIcon.remove_style_class_name(c);
         this._stateIcon.add_style_class_name(view.panel.styleClass);
         this._micIcon.visible = view.micIndicator;
-        this.accessible_name = `whatdidido: ${view.panel.label}${view.mic.on ? ', microphone on' : ''}`;
+        this.accessible_name = view.accessibleName;
 
         this._title.text = view.header.title;
         this._detail.text = view.header.detail;
