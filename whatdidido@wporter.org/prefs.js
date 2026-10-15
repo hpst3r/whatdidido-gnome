@@ -33,26 +33,28 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
 
         const mic = new Adw.PreferencesGroup({
             title: 'Microphone',
-            description: 'Choose the microphone from the top-bar menu → Microphone source.',
+            description: 'Choose the microphone from the top-bar menu → Microphone source. ' +
+                'Only that microphone is ever turned on; if it is not connected the microphone stays off.',
         });
         page.add(mic);
-        const preferred = new Adw.ActionRow({title: 'Preferred microphone'});
-        const reset = new Gtk.Button({label: 'Use first available', valign: Gtk.Align.CENTER});
-        reset.connect('clicked', () => {
-            settings.set_string('microphone-id', '');
-            settings.set_string('microphone-label', '');
+        // Forget writes one key at a time: the stable id last, so the extension's
+        // migration never re-adopts it from a legacy id not yet cleared.
+        const MIC_KEYS = ['microphone-id', 'microphone-label', 'microphone-stable-id'];
+        const preferred = new Adw.ActionRow({title: 'Chosen microphone'});
+        const forget = new Gtk.Button({label: 'Forget microphone', valign: Gtk.Align.CENTER});
+        forget.connect('clicked', () => {
+            for (const key of MIC_KEYS)
+                settings.set_string(key, '');
         });
-        preferred.add_suffix(reset);
+        preferred.add_suffix(forget);
         mic.add(preferred);
         const sync = () => {
-            const id = settings.get_string('microphone-id');
-            preferred.subtitle = id ? settings.get_string('microphone-label') || id : 'First available (none chosen)';
-            reset.sensitive = !!id;
+            const chosen = !!(settings.get_string('microphone-stable-id') || settings.get_string('microphone-id'));
+            const label = settings.get_string('microphone-label');
+            preferred.subtitle = chosen ? label || 'Unnamed microphone' : 'None chosen';
+            forget.sensitive = MIC_KEYS.some(key => settings.get_string(key));
         };
-        const ids = [
-            settings.connect('changed::microphone-id', sync),
-            settings.connect('changed::microphone-label', sync),
-        ];
+        const ids = MIC_KEYS.map(key => settings.connect(`changed::${key}`, sync));
         sync();
 
         const activity = new Adw.PreferencesGroup({

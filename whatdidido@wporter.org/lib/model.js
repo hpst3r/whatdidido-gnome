@@ -98,28 +98,6 @@ export function intervalItems(current) {
     return values.map(seconds => ({seconds, label: formatInterval(seconds), current: seconds === current}));
 }
 
-// The configured microphone if it is still present, else the first one.
-export function chooseMicrophone(mics, preferredId) {
-    if (!Array.isArray(mics) || !mics.length)
-        return null;
-    if (preferredId && mics.some(m => m.id === preferredId))
-        return preferredId;
-    return mics[0].id;
-}
-
-export function micSourceItems(mics, preferredId) {
-    const chosen = chooseMicrophone(mics, preferredId);
-    return (mics ?? []).map(m => ({id: m.id, label: m.label || m.id, checked: m.id === chosen}));
-}
-
-// Body for POST /control/v1/mic, or null when there is nothing to turn on.
-export function micRequest(on, mics, preferredId, inventory) {
-    if (!on)
-        return {on: false};
-    const id = chooseMicrophone(mics, preferredId);
-    return id === null ? null : {on: true, source_id: id, inventory};
-}
-
 // The contract defines mic changes for stopped/failed (next Start), recording,
 // paused and recovering; starting/stopping are transient, so wait them out.
 const MIC_STATES = ['stopped', 'failed', 'recording', 'paused', 'recovering'];
@@ -132,6 +110,14 @@ export function micSwitch(status, running) {
         sensitive: mic.available === true && MIC_STATES.includes(status.state),
         on: mic.on === true,
     };
+}
+
+// mic.state in which nothing is or will be captured although mic.on is true
+// (RELIABILITY.md section 4): no live-microphone cue in the top bar.
+const MIC_DEAD_STATES = ['limit_reached', 'failed'];
+
+function micLive(status, running) {
+    return running && status.mic?.on === true && !MIC_DEAD_STATES.includes(status.mic.state);
 }
 
 const BUSY = ['starting', 'recording', 'recovering', 'stopping'];
@@ -187,12 +173,16 @@ const ERROR_CODES = {
     forbidden: 'Control token rejected',
     failed: 'The command failed',
     invalid: 'Request rejected as invalid',
+    microphone_unset: 'Choose a microphone',
 };
 
 // err: a client error ({notRunning, status, code, message}) or any Error.
 export function errorText(err) {
     if (err?.notRunning)
         return NOT_RUNNING_TEXT;
+    // The client's own refusal names the microphone ("<label> is not connected").
+    if (err?.code === 'microphone_missing' && err.message)
+        return err.message;
     if (err?.code && ERROR_CODES[err.code])
         return ERROR_CODES[err.code];
     if (err?.status)
@@ -208,14 +198,17 @@ export function buildView(status, {running = true, showMic = true, pollError = n
     running = running && !!status;
     const state = running ? status.state : null;
     const mic = micSwitch(status, running);
+    const live = micLive(status, running);
+    const panel = panelState(state, running);
     const header = running ? headerText(status) : {title: NOT_RUNNING_TEXT, detail: pollError ?? ''};
     if (state === 'paused' && pausedMs !== null)
         header.detail = `${pausedForText(pausedMs)} · ${header.detail}`;
     return {
         running,
         state,
-        panel: panelState(state, running),
-        micIndicator: running && showMic && status.mic?.on === true,
+        panel,
+        micIndicator: live && showMic,
+        accessibleName: `whatdidido: ${panel.label}${live ? ', microphone on' : ''}`,
         header,
         actions: allowedActions(state),
         mic,

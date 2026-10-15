@@ -2,21 +2,25 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
-import {micRequest, parseControlFile} from './model.js';
+import {CHOOSE_TEXT, hasMicChoice, micRequest, missingText, preferredMic} from './mic_model.js';
+import {parseControlFile} from './model.js';
 
 Gio._promisify(Soup.Session.prototype, 'send_and_read_async');
 Gio._promisify(Gio.File.prototype, 'load_contents_async');
 
 // notRunning: no control file, or nothing listening at its base_url.
-// status/code: the HTTP status and the API's {"error": code}.
+// status/code: the HTTP status and the API's {"error": code}, or the
+// client's own microphone_unset / microphone_missing (nothing was sent; the
+// latter carries the fresh inventory as `microphones`).
 // Messages never contain the token.
 export class ControlError extends Error {
-    constructor(message, {status = 0, code = null, notRunning = false} = {}) {
+    constructor(message, {status = 0, code = null, notRunning = false, microphones = null} = {}) {
         super(message);
         this.name = 'ControlError';
         this.status = status;
         this.code = code;
         this.notRunning = notRunning;
+        this.microphones = microphones;
     }
 }
 
@@ -139,16 +143,23 @@ export class ControlClient {
         return {recorded: data.recorded === true};
     }
 
-    // Turning on picks the preferred microphone (else the first) from a fresh
-    // inventory; if the inventory changed in between, re-read it and retry once.
-    async setMicOn(on, preferredId, cancellable) {
+    // Turning on resolves the already chosen microphone (preferred: {stableId,
+    // id, label}, see mic_model.js) against a fresh inventory, since its serial
+    // may have changed since the menu was built; if the inventory changed in
+    // between, re-read it and retry once. It never picks another microphone:
+    // no choice, or a choice not in the inventory, rejects and sends nothing.
+    async setMicOn(on, preferred, cancellable) {
         if (!on)
             return this._request('POST', '/control/v1/mic', {on: false}, cancellable);
+        preferred = preferredMic(preferred);
+        if (!hasMicChoice(preferred))
+            throw new ControlError(CHOOSE_TEXT, {code: 'microphone_unset'});
         for (let attempt = 0; ; attempt++) {
             const inv = await this.microphones(cancellable);
-            const body = micRequest(true, inv.microphones, preferredId, inv.inventory);
+            const mics = Array.isArray(inv.microphones) ? inv.microphones : [];
+            const body = micRequest(true, mics, preferred, inv.inventory);
             if (!body)
-                throw new ControlError('No microphone available');
+                throw new ControlError(missingText(preferred), {code: 'microphone_missing', microphones: mics});
             try {
                 return await this._request('POST', '/control/v1/mic', body, cancellable);
             } catch (e) {

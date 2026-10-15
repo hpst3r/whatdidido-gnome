@@ -81,24 +81,35 @@ async function main() {
     eq('interval body', fake.requests[0] && JSON.parse(fake.requests[0].body), {seconds: 10});
 
     // --- microphone --------------------------------------------------------------
+    // Older server (no stable ids): the saved legacy id, never a fallback.
+    const legacy = (id, label = 'USB headset') => ({stableId: '', id, label});
     fake.requests = [];
-    const m = await client.setMicOn(true, 'm2', null);
+    const m = await client.setMicOn(true, legacy('m2'), null);
     eq('mic on preferred', m, {mic: {available: true, on: true, source_id: 'm2'}});
     eq('mic on sequence', summary(fake.requests), [
         'GET /control/v1/microphones T1 ',
         'POST /control/v1/mic T1 {"on":true,"source_id":"m2","inventory":"inv1"}']);
 
     fake.requests = [];
-    await client.setMicOn(true, 'unplugged', null);
-    eq('mic on falls back to first', JSON.parse(fake.requests[1]?.body ?? 'null')?.source_id, 'm1');
+    await rejects('mic on: preferred unplugged -> microphone_missing, no fallback', client.setMicOn(true, legacy('unplugged'), null),
+        e => e.code === 'microphone_missing' && e.message === 'USB headset is not connected' &&
+            JSON.stringify(e.microphones?.map(x => x.id)) === '["m1","m2"]');
+    eq('mic on unplugged: nothing posted', summary(fake.requests), ['GET /control/v1/microphones T1 ']);
 
     fake.requests = [];
-    eq('mic off', await client.setMicOn(false, 'm2', null), {mic: {available: true, on: false, source_id: null}});
+    await rejects('mic on without a choice -> microphone_unset', client.setMicOn(true, {}, null), e => e.code === 'microphone_unset');
+    eq('mic on without a choice: no request at all', fake.requests.length, 0);
+
+    fake.requests = [];
+    eq('mic off', await client.setMicOn(false, legacy('m2'), null), {mic: {available: true, on: false, source_id: null}});
     eq('mic off sends only {on:false}', summary(fake.requests), ['POST /control/v1/mic T1 {"on":false}']);
+    fake.requests = [];
+    await client.setMicOn(false, {}, null);
+    eq('mic off without a choice is still sent', summary(fake.requests), ['POST /control/v1/mic T1 {"on":false}']);
 
     fake.requests = [];
     fake.inventoryChanges = 1;
-    eq('inventory_changed retried once', (await client.setMicOn(true, '', null))?.mic?.on, true);
+    eq('inventory_changed retried once', (await client.setMicOn(true, legacy('m1', 'Built-in'), null))?.mic?.on, true);
     eq('inventory retry sequence', summary(fake.requests), [
         'GET /control/v1/microphones T1 ',
         'POST /control/v1/mic T1 {"on":true,"source_id":"m1","inventory":"inv1"}',
@@ -107,13 +118,58 @@ async function main() {
 
     fake.requests = [];
     fake.inventoryChanges = 2;
-    await rejects('inventory_changed twice -> error', client.setMicOn(true, '', null),
+    await rejects('inventory_changed twice -> error', client.setMicOn(true, legacy('m1', 'Built-in'), null),
         e => e.status === 409 && e.code === 'inventory_changed');
     eq('only one retry', fake.requests.length, 4);
     fake.inventoryChanges = 0;
 
     fake.mics = [];
-    await rejects('no microphones -> error', client.setMicOn(true, '', null), e => /microphone/i.test(e.message));
+    fake.requests = [];
+    await rejects('no microphones -> microphone_missing', client.setMicOn(true, legacy('m1', 'Built-in'), null), e => e.code === 'microphone_missing');
+    eq('no microphones: nothing posted', fake.requests.filter(r => r.method === 'POST').length, 0);
+
+    // --- microphone with stable ids (RELIABILITY.md section 7) ---------------------
+    fake.micDetails = true;
+    const usb = {stableId: 'usb-x', id: '101', label: 'USB headset'};
+    const posted = () => fake.requests.filter(r => r.method === 'POST').map(r => JSON.parse(r.body).source_id);
+    fake.mics = [{id: '101', label: 'USB headset', stable_id: 'usb-x'}];
+    fake.requests = [];
+    eq('stable id: available', (await client.setMicOn(true, usb, null))?.mic,
+        {available: true, on: true, source_id: '101', stable_id: 'usb-x', label: 'USB headset', state: 'pending', remembered: false});
+    await client.setMicOn(false, usb, null);
+
+    // Reconnect: the dock re-enumerated the USB microphone with a new serial
+    // and the built-in one is listed first. The saved legacy id is stale.
+    fake.inventory = 'inv10';
+    fake.mics = [{id: '7', label: 'Built-in', stable_id: 'pci-builtin'}, {id: '202', label: 'USB headset', stable_id: 'usb-x'}];
+    fake.requests = [];
+    eq('reconnected: re-resolved by stable id', (await client.setMicOn(true, usb, null))?.mic?.source_id, '202');
+    eq('reconnected: posted the new serial, never the built-in', posted(), ['202']);
+    await client.setMicOn(false, usb, null);
+
+    // Re-enumerated between the client's GET and POST: the retry re-resolves.
+    fake.inventory = 'inv20';
+    fake.mics = [{id: '101', label: 'USB headset', stable_id: 'usb-x'}];
+    fake.beforeMicPost = () => {
+        fake.beforeMicPost = null;
+        fake.inventory = 'inv21';
+        fake.mics = [{id: '7', label: 'Built-in', stable_id: 'pci-builtin'}, {id: '202', label: 'USB headset', stable_id: 'usb-x'}];
+    };
+    fake.requests = [];
+    eq('re-enumerated mid-request: on', (await client.setMicOn(true, usb, null))?.mic?.source_id, '202');
+    eq('re-enumerated mid-request: posted 101 (refused) then 202, never 7', posted(), ['101', '202']);
+    await client.setMicOn(false, usb, null);
+
+    // Missing: unplugged, only the built-in left.
+    fake.mics = [{id: '7', label: 'Built-in', stable_id: 'pci-builtin'}];
+    fake.requests = [];
+    await rejects('stable id missing -> microphone_missing', client.setMicOn(true, usb, null),
+        e => e.code === 'microphone_missing' && e.message === 'USB headset is not connected');
+    eq('stable id missing: nothing posted', posted(), []);
+    eq('stable id missing: mic stays off', (await client.status(null)).mic.on, false);
+
+    fake.micDetails = false;
+    fake.inventory = 'inv1';
     fake.mics = [{id: 'm1', label: 'Built-in'}];
 
     // --- active window (POST /control/v1/window) -----------------------------------
