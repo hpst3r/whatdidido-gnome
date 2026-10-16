@@ -5,6 +5,7 @@ import GLib from 'gi://GLib';
 import System from 'system';
 
 import {ControlClient} from '../whatdidido@wporter.org/lib/client.js';
+import {MicReminder} from '../whatdidido@wporter.org/lib/mic_reminder.js';
 import {sanitizeWindow, windowPayload, WindowReporter} from '../whatdidido@wporter.org/lib/window_model.js';
 import {FakeControl, writeControlFile, removeControlFile} from './fake_control.js';
 
@@ -171,6 +172,36 @@ async function main() {
     fake.micDetails = false;
     fake.inventory = 'inv1';
     fake.mics = [{id: 'm1', label: 'Built-in'}];
+
+    // --- microphone reminder fed from status polls -------------------------------
+    const savedMic = fake.status.mic;
+    fake.status.state = 'recording';
+    fake.status.mic = {available: true, on: true, source_id: 'm1', stable_id: 'alsa_input.pci', label: 'Built-in', state: 'capturing', remembered: true};
+    const mr = new MicReminder({minutes: 1});
+    const poll = async now => mr.observe(await client.status(null), now);
+    fake.requests = [];
+    const older = await client.status(null);
+    eq('older server: no transcription keys', ['transcription_enabled', 'transcription_with_text'].map(k => k in older), [false, false]);
+    await poll(0);
+    eq('older server: mic reminder inert', [await poll(5 * 60000), mr.dueAt], [{show: null, withdraw: false}, null]);
+    fake.transcription = {enabled: false};
+    const off = await client.status(null);
+    eq('transcription off: enabled false, no counter', [off.transcription_enabled, 'transcription_with_text' in off], [false, false]);
+    eq('transcription off: mic reminder inert', [await poll(6 * 60000), mr.dueAt], [{show: null, withdraw: false}, null]);
+    fake.transcription = {enabled: true, completed: 7, withText: 2};
+    const on = await client.status(null);
+    eq('transcription on: counter right after transcription_completed',
+        Object.keys(on).slice(Object.keys(on).indexOf('transcription_completed'), Object.keys(on).indexOf('transcription_completed') + 2),
+        ['transcription_completed', 'transcription_with_text']);
+    eq('transcription on: armed', [await poll(10 * 60000), mr.dueAt], [{show: null, withdraw: false}, 11 * 60000]);
+    fake.transcription.completed = 9;  // empty transcripts only
+    eq('empty transcripts: reminds', await poll(11 * 60000),
+        {show: 'No speech transcribed from Built-in for 1 minute.', withdraw: false});
+    fake.transcription.withText = 3;
+    eq('speech: withdraws', await poll(11.5 * 60000), {show: null, withdraw: true});
+    eq('mic reminder only ever reads the status', fake.requests.every(r => r.method === 'GET' && r.path === '/control/v1/status'), true);
+    fake.transcription = null;
+    fake.status.mic = savedMic;
 
     // --- active window (POST /control/v1/window) -----------------------------------
     const W = {focus: 'window', app_id: 'org.gnome.Ptyxis.desktop', app_name: 'Terminal', wm_class: 'org.gnome.Ptyxis', title: 'vim'};

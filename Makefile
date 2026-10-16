@@ -14,6 +14,7 @@ test:
 	gjs -m tests/mic_review_forget_test.js
 	gjs -m tests/mic_review_indicator_test.js
 	gjs -m tests/pause_reminder_test.js
+	gjs -m tests/mic_reminder_test.js
 	gjs -m tests/window_model_test.js
 	gjs -m tests/window_retry_test.js
 	gjs -m tests/window_stale_dedupe_test.js

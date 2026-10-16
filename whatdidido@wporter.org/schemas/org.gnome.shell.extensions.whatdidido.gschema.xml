@@ -48,5 +48,11 @@
       <summary>Remind after being paused this long (minutes)</summary>
       <description>While the work session stays paused, show a notification after this many minutes and again every this many minutes. Counted from when the extension first saw the pause. 0 = no reminders.</description>
     </key>
+    <key name="mic-reminder-minutes" type="u">
+      <range min="0" max="240"/>
+      <default>10</default>
+      <summary>Remind to check the microphone after no speech for this long (minutes)</summary>
+      <description>While the session is recording with the microphone on and the server transcribes audio, show a notification when no speech has been transcribed for this many minutes, and again every this many minutes. Counted from when the extension first saw the microphone on, or the last speech. Servers that don't report transcriptions with text never remind. 0 = no reminders.</description>
+    </key>
   </schema>
 </schemalist>
