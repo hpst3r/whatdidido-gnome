@@ -12,6 +12,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {ControlClient} from './lib/client.js';
 import {MicController} from './lib/mic_model.js';
+import {MicReminder, MIC_REMINDER_TITLE} from './lib/mic_reminder.js';
 import {buildView, errorText, pageUrl, pollPeriod} from './lib/model.js';
 import {PauseReminder, REMINDER_TITLE, timerDelay} from './lib/pause_reminder.js';
 import {windowSwitchView} from './lib/window_model.js';
@@ -52,6 +53,11 @@ class Indicator extends PanelMenu.Button {
         this._reminderSource = null;
         this._reminderNotification = null;
         this._resumeLogged = null;
+        this._micReminder = new MicReminder({minutes: this._settings.get_uint('mic-reminder-minutes')});
+        this._micReminderTimer = 0;
+        this._micReminderSource = null;
+        this._micReminderNotification = null;
+        this._chooseMicIdleId = 0;  // the mic reminder's "Choose microphone"
         this._reopenMenuId = 0;     // 'menu-closed' handler showing the source list again
         this._reopenIdleId = 0;
         this._mic = new MicController({
@@ -103,6 +109,8 @@ class Indicator extends PanelMenu.Button {
             this._settings.connect('changed::report-active-window', () => this._render()),
             this._settings.connect('changed::pause-reminder-minutes', () => this._applyReminder(
                 this._reminder.setMinutes(this._settings.get_uint('pause-reminder-minutes'), monotonicMs()))),
+            this._settings.connect('changed::mic-reminder-minutes', () => this._applyMicReminder(
+                this._micReminder.setMinutes(this._settings.get_uint('mic-reminder-minutes'), monotonicMs()))),
         ];
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open) {
@@ -223,9 +231,12 @@ class Indicator extends PanelMenu.Button {
         if (this._cancellable !== cancellable)
             return;
         // Only a status or "not running" says whether the session is still
-        // paused; any other poll failure leaves the reminder as it was.
-        if (observed)
+        // paused (or the microphone quiet); any other poll failure leaves the
+        // reminders as they were.
+        if (observed) {
             this._applyReminder(this._reminder.observe(this._running ? this._status.state : null, monotonicMs()));
+            this._applyMicReminder(this._micReminder.observe(this._running ? this._status : null, monotonicMs()));
+        }
         this._windowTracker.updateStatus(this._status, this._running);
         this._mic.updateStatus(this._status, this._running);
         this._render();
@@ -342,6 +353,94 @@ class Indicator extends PanelMenu.Button {
         const notification = this._reminderNotification;
         this._reminderNotification = null;
         notification?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
+    }
+
+    // The microphone reminder, like the pause reminder but independent: its
+    // own timeout, source and notification. It never sends a control request.
+    _applyMicReminder({show, withdraw}) {
+        if (this._destroyed)
+            return;
+        if (withdraw)
+            this._withdrawMicReminder();
+        if (show)
+            this._showMicReminder(show);
+        if (this._micReminderTimer)
+            GLib.source_remove(this._micReminderTimer);
+        this._micReminderTimer = 0;
+        const delay = timerDelay(this._micReminder.dueAt, monotonicMs());
+        if (delay === null)
+            return;
+        this._micReminderTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._micReminderTimer = 0;
+            this._applyMicReminder(this._micReminder.fire(monotonicMs()));
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _ensureMicReminderSource() {
+        if (this._micReminderSource)
+            return this._micReminderSource;
+        const source = new MessageTray.Source({title: 'whatdidido', iconName: 'audio-input-microphone-symbolic'});
+        source.connect('destroy', () => {
+            if (this._micReminderSource === source)
+                this._micReminderSource = null;
+        });
+        Main.messageTray.add(source);
+        this._micReminderSource = source;
+        return source;
+    }
+
+    // Replaces the previous one, never stacks (see _showReminder).
+    _showMicReminder(body) {
+        const source = this._ensureMicReminderSource();
+        const old = this._micReminderNotification;
+        const notification = new MessageTray.Notification({
+            source,
+            title: MIC_REMINDER_TITLE,
+            body,
+            urgency: MessageTray.Urgency.HIGH,
+        });
+        notification.addAction('Choose microphone', () => {
+            this._forgetMicReminder(notification);
+            this._showMicSourcesFromReminder();
+        });
+        notification.addAction('Stop reminding', () => {
+            this._forgetMicReminder(notification);
+            this._applyMicReminder(this._micReminder.suppress());
+        });
+        notification.connect('destroy', () => this._forgetMicReminder(notification));
+        this._micReminderNotification = notification;
+        source.addNotification(notification);
+        old?.destroy(MessageTray.NotificationDestroyedReason.REPLACED);
+    }
+
+    _forgetMicReminder(notification) {
+        if (this._micReminderNotification === notification)
+            this._micReminderNotification = null;
+    }
+
+    _withdrawMicReminder() {
+        const notification = this._micReminderNotification;
+        this._micReminderNotification = null;
+        notification?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
+    }
+
+    // "Choose microphone" only shows the menu, with the source list open if
+    // the session offers one; picking a source is the menu's own path. On
+    // idle, once the banner or the calendar has handled the click.
+    _showMicSourcesFromReminder() {
+        if (this._destroyed || this._chooseMicIdleId)
+            return;
+        this._chooseMicIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._chooseMicIdleId = 0;
+            if (this._destroyed)
+                return GLib.SOURCE_REMOVE;
+            if (!this.menu.isOpen)
+                this.menu.open();
+            if (this._micSourceMenu.visible)
+                this._micSourceMenu.setSubmenuShown(true);
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // User actions only: the switch and the source submenu. Polling never
@@ -522,6 +621,15 @@ class Indicator extends PanelMenu.Button {
         this._reminderNotification = null;
         this._reminderSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
         this._reminderSource = null;
+        if (this._micReminderTimer)
+            GLib.source_remove(this._micReminderTimer);
+        this._micReminderTimer = 0;
+        if (this._chooseMicIdleId)
+            GLib.source_remove(this._chooseMicIdleId);
+        this._chooseMicIdleId = 0;
+        this._micReminderNotification = null;
+        this._micReminderSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
+        this._micReminderSource = null;
         this._cancellable?.cancel();
         this._actionCancellable.cancel();
         for (const id of this._settingsIds)

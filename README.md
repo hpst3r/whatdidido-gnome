@@ -74,6 +74,29 @@ still respects Do Not Disturb.
   poll other than "not running" (e.g. a timeout) keeps the count. Time is
   measured on the monotonic clock, so time spent suspended is not counted.
 
+## Microphone reminder
+
+A wrong or dead microphone shows up as transcripts that keep arriving but are
+all empty. So while the session is **recording** with the microphone on and the
+server transcribes audio (it reports `transcription_with_text`), a
+notification "Check your microphone" ("No speech transcribed from USB headset
+for N minutes.") appears when no speech has been transcribed for
+`mic-reminder-minutes` (default 10), and again every that many minutes. It is
+counted from the first poll that saw the microphone on and starts over when
+speech is transcribed, the session server restarts, or another microphone is
+used; that also withdraws a shown reminder. Transcripts land about one audio
+segment (default 60 s) after the speech, so a delay of only a minute or two
+can remind while you are talking. Leaving recording (pause, reconnecting,
+stop), turning the microphone off, audio that stopped for the whole session
+(limit reached or failed: no microphone choice fixes it), a captured output
+monitor (the server's count includes its transcripts, so speech from a call
+or video would hide a dead microphone), or a server without transcription (or
+older than the counter) withdraws it and never reminds.
+**Choose microphone** opens the menu at **Microphone source** (it doesn't
+switch anything by itself); **Stop reminding** stops it until the next
+speech, another microphone or leaving recording. It is independent of the
+pause reminder, sends nothing to the server, and 0 = off.
+
 ## Active window (time accounting)
 
 When the work-session server runs with `--window-activity`, the extension
@@ -112,7 +135,7 @@ name, the WM class and the window title, or "no focused window".
 - The token is never stored in dconf/GSettings and never logged; error
   messages never include it. Settings hold only poll intervals, the chosen
   microphone's stable id, opaque id and label, the indicator toggle, the active-window
-  switch, the excluded app ids and the pause-reminder delay.
+  switch, the excluded app ids and the pause- and microphone-reminder delays.
 - Requests carry `Authorization: Bearer …` and no `Origin`, `Cookie` or
   `Sec-Fetch-*` headers (the API refuses browser-shaped requests).
 - Microphone capture is only offered when the server was started with
@@ -138,6 +161,7 @@ name, the WM class and the window title, or "no focused window".
 | `report-active-window` | true | report the focused window while recording (server needs `--window-activity`) |
 | `window-title-excluded-apps` | empty | app ids (with or without `.desktop`) whose titles are sent empty; comma-separated in Settings |
 | `pause-reminder-minutes` | 10 | notify after this many minutes paused, then every this many minutes; 0 = off (0..240) |
+| `mic-reminder-minutes` | 10 | notify after this many minutes with the microphone on and no speech transcribed, then every this many minutes; 0 = off (0..240) |
 
 ## Develop
 
@@ -169,7 +193,8 @@ the focused window's signal bookkeeping) and `lib/window_tracker.js` only
 connects the Shell signals and GLib timers to it. `lib/pause_reminder.js`
 holds the pause reminder's rules (paused-since, due time, repeats, withdraw,
 "Stop reminding", texts) on an injected clock; `extension.js` arms one GLib
-timeout for its next due time and shows the notification. `lib/client.js`
+timeout for its next due time and shows the notification; `lib/mic_reminder.js`
+does the same for the microphone reminder. `lib/client.js`
 (libsoup 3) is tested against `tests/fake_control.js`, a Soup.Server fake that
 enforces the contract's request rules. `extension.js`/`prefs.js` only run
 inside GNOME Shell.

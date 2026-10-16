@@ -57,6 +57,11 @@ export class FakeControl {
             last_error: null, reason: null,
             mic: {available: true, on: false, source_id: null},
         };
+        // Transcription: null mimics an older server (no transcription keys);
+        // {enabled: false} reports it off (no counter); {enabled: true,
+        // completed, withText} adds transcription_with_text after
+        // transcription_completed.
+        this.transcription = null;
         this.inventory = 'inv1';
         this.mics = [{id: 'm1', label: 'Built-in'}, {id: 'm2', label: 'USB headset'}];
         // Window activity (--window-activity): off by default, like the server.
@@ -128,8 +133,10 @@ export class FakeControl {
 
         const route = `${method} ${path}`;
         switch (route) {
-        case 'GET /control/v1/status':
-            return this._reply(msg, 200, this.windowActivity ? {...this.status, window_activity: this._windowStatus()} : this.status);
+        case 'GET /control/v1/status': {
+            const status = {...this.status, ...this._transcriptionStatus()};
+            return this._reply(msg, 200, this.windowActivity ? {...status, window_activity: this._windowStatus()} : status);
+        }
         case 'GET /control/v1/microphones':
             return this._reply(msg, 200, {inventory: this.inventory, microphones: this._micList()});
         case 'POST /control/v1/command': {
@@ -190,6 +197,15 @@ export class FakeControl {
         if (this.micDetails)
             return this.mics.map(m => ({stable_id: null, ...m}));
         return this.mics.map(({stable_id: _, ...m}) => m);
+    }
+
+    _transcriptionStatus() {
+        const t = this.transcription;
+        if (!t)
+            return {};
+        if (!t.enabled)
+            return {transcription_enabled: false};
+        return {transcription_enabled: true, transcription_completed: t.completed ?? 0, transcription_with_text: t.withText ?? 0};
     }
 
     _windowStatus() {

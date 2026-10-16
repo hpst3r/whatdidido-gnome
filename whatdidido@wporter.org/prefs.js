@@ -84,7 +84,7 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
 
         const reminders = new Adw.PreferencesGroup({
             title: 'Reminders',
-            description: 'Counted from when the extension first saw the pause.',
+            description: 'Counted from when the extension first saw the pause, or the microphone on without speech.',
         });
         page.add(reminders);
         const pauseReminder = new Adw.SpinRow({
@@ -94,6 +94,14 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         });
         settings.bind('pause-reminder-minutes', pauseReminder, 'value', Gio.SettingsBindFlags.DEFAULT);
         reminders.add(pauseReminder);
+        const micReminder = new Adw.SpinRow({
+            title: 'Remind to check the microphone after (minutes)',
+            subtitle: 'A notification when the microphone is on but no speech was transcribed for this long, ' +
+                'then again every this many minutes; 0 = never',
+            adjustment: new Gtk.Adjustment({lower: 0, upper: 240, step_increment: 1, page_increment: 10}),
+        });
+        settings.bind('mic-reminder-minutes', micReminder, 'value', Gio.SettingsBindFlags.DEFAULT);
+        reminders.add(micReminder);
 
         window.connect('close-request', () => {
             for (const id of ids)
