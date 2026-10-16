@@ -84,9 +84,14 @@ for N minutes.") appears when no speech has been transcribed for
 `mic-reminder-minutes` (default 10), and again every that many minutes. It is
 counted from the first poll that saw the microphone on and starts over when
 speech is transcribed, the session server restarts, or another microphone is
-used; that also withdraws a shown reminder. Leaving recording (pause,
-reconnecting, stop), turning the microphone off, or a server without
-transcription (or older than the counter) withdraws it and never reminds.
+used; that also withdraws a shown reminder. Transcripts land about one audio
+segment (default 60 s) after the speech, so a delay of only a minute or two
+can remind while you are talking. Leaving recording (pause, reconnecting,
+stop), turning the microphone off, audio that stopped for the whole session
+(limit reached or failed: no microphone choice fixes it), a captured output
+monitor (the server's count includes its transcripts, so speech from a call
+or video would hide a dead microphone), or a server without transcription (or
+older than the counter) withdraws it and never reminds.
 **Choose microphone** opens the menu at **Microphone source** (it doesn't
 switch anything by itself); **Stop reminding** stops it until the next
 speech, another microphone or leaving recording. It is independent of the

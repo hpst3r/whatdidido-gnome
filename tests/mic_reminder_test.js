@@ -58,8 +58,14 @@ eq('body of junk ms is 0 minutes', micReminderBody('X', NaN), 'No speech transcr
 eq('armed: recording, mic on, transcription on, counter present', micArmed(st(), 10), true);
 eq('armed: counter 0 counts', micArmed(st(0), 10), true);
 eq('armed: mic trouble while on still counts',
-    ['waiting_for_device', 'retrying', 'failed', 'pending', undefined].map(s => micArmed(st(0, {mic: {state: s}}), 10)),
-    [true, true, true, true, true]);
+    ['waiting_for_device', 'retrying', 'pending', undefined].map(s => micArmed(st(0, {mic: {state: s}}), 10)),
+    [true, true, true, true]);
+eq('not armed: session-wide audio trouble no microphone choice fixes',
+    ['limit_reached', 'failed'].map(s => micArmed(st(0, {mic: {state: s}}), 10)), [false, false]);
+eq('armed: output monitor off or unknown (older server)',
+    [false, undefined].map(o => micArmed(st(0, {audio_output_monitor: o}), 10)), [true, true]);
+eq('not armed: output monitor captured (its transcripts count too)',
+    micArmed(st(0, {audio_output_monitor: true}), 10), false);
 eq('armed: old server mic without stable_id/label/state', micArmed(st(0, {mic: {stable_id: undefined, label: undefined, state: undefined}}), 10), true);
 eq('not armed: not running', micArmed(null, 10), false);
 eq('not armed: minutes 0', micArmed(st(), 0), false);
@@ -168,6 +174,9 @@ const DISARM = [
     ['failed', st(4, {state: 'failed'})],
     ['transcription turned off', without(st(4, {transcription_enabled: false}), 'transcription_with_text')],
     ['older server', without(st(4), 'transcription_with_text')],
+    ['audio limit reached', st(4, {mic: {state: 'limit_reached'}})],
+    ['audio failed', st(4, {mic: {state: 'failed'}})],
+    ['output monitor captured', st(4, {audio_output_monitor: true})],
 ];
 for (const [name, status] of DISARM) {
     r = new MicReminder({minutes: 10});
@@ -179,6 +188,16 @@ for (const [name, status] of DISARM) {
     eq(`${name}: armed again counts from then`, [r.observe(st(4), T0 + 13 * M), r.quietSince, r.dueAt],
         [NONE, T0 + 13 * M, T0 + 23 * M]);
 }
+// Once --max-audio-bytes is reached the server records no audio until a new
+// session while mic.on stays true; no microphone choice can help.
+r = new MicReminder({minutes: 10});
+r.observe(st(4, {mic: {state: 'limit_reached'}}), T0);
+eq('limit_reached: no reminder after 10 min', r.observe(st(4, {mic: {state: 'limit_reached'}}), T0 + 10 * M), NONE);
+// Speech from a call or video on the output monitor would hide a dead
+// microphone, so the reminder stays inert rather than wrong.
+r = new MicReminder({minutes: 10});
+r.observe(st(4, {audio_output_monitor: true}), T0);
+eq('output monitor: no reminder after 10 min', r.observe(st(4, {audio_output_monitor: true}), T0 + 10 * M), NONE);
 r = new MicReminder({minutes: 10});
 r.observe(st(4), T0);
 eq('disarm before any reminder withdraws (idempotent in the glue)', r.observe(null, T0 + M), WITHDRAW);

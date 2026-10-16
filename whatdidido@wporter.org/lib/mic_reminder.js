@@ -17,13 +17,21 @@ export function micReminderBody(label, ms) {
 // Whether quiet time counts: recording with the microphone on and a server
 // that reports transcriptions with text. Old servers and transcription off
 // omit the counter. A microphone that is on but waiting for its device,
-// retrying or failed still counts: that is a microphone problem too.
+// retrying or pending still counts: that is a microphone problem too. Audio
+// limit_reached or failed does not: those stop audio for the whole session
+// and no microphone choice fixes them. Nor does a captured output monitor:
+// the counter counts its transcripts too, so speech from a call or video
+// would hide a dead microphone (inert is better than wrong).
 // status: the polled status; null when the server is not running.
+const SESSION_AUDIO_TROUBLE = new Set(['limit_reached', 'failed']);
+
 export function micArmed(status, minutes) {
     return minutes > 0 &&
         status?.state === 'recording' &&
         status.waiting_for_unlock !== true &&
         status.mic?.on === true &&
+        !SESSION_AUDIO_TROUBLE.has(status.mic.state) &&
+        status.audio_output_monitor !== true &&
         status.transcription_enabled === true &&
         Number.isInteger(status.transcription_with_text);
 }
@@ -49,8 +57,9 @@ const WITHDRAW = Object.freeze({show: null, withdraw: true});
 //   and ends "Stop reminding".
 // - The first reminder is due at quietSince + minutes, each later one
 //   minutes after the previous reminder (the time it was actually shown).
-// - Not armed (another state, microphone off, not running, older server,
-//   transcription off, minutes 0) cancels everything and withdraws.
+// - Not armed (another state, microphone off, audio limit reached or failed,
+//   output monitor captured, not running, older server, transcription off,
+//   minutes 0) cancels everything and withdraws.
 // - setMinutes() while armed recomputes from quietSince / the last reminder;
 //   already overdue reminds at once; 0 cancels and withdraws, and turning it
 //   back on counts from the next poll.
