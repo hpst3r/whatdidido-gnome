@@ -242,9 +242,10 @@ export function appRoute(view, params = {}) {
     return `#/${view}${query}`;
 }
 
-// A loopback http origin: http://127.0.0.1:<port> or http://[::1]:<port>,
+// A loopback http origin: http://127.0.0.1:<port> (not [::1]: the app server
+// grants the local principal only for Host 127.0.0.1, POPOVER.md Amendment 1),
 // no userinfo (it would not match), then an optional path, query, fragment.
-const LOOPBACK_RE = /^http:\/\/(127\.0\.0\.1|\[::1\]):(\d{1,5})((?:[/?#].*)?)$/;
+const LOOPBACK_RE = /^http:\/\/(127\.0\.0\.1):(\d{1,5})((?:[/?#].*)?)$/;
 
 function loopback(url) {
     const m = typeof url === 'string' ? LOOPBACK_RE.exec(url) : null;

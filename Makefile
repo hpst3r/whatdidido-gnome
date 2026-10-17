@@ -27,6 +27,7 @@ test:
 	gjs -m tests/day_model_test.js
 	gjs -m tests/popover_model_test.js
 	gjs -m tests/app_client_test.js $(TEST_RUNTIME)/app-client
+	gjs -m tests/shots/fakes_test.js $(TEST_RUNTIME)/shots-fakes
 
 # Read-only check against the running server (control.json in $XDG_RUNTIME_DIR).
 live:

@@ -257,3 +257,23 @@ menu, runs the scenario's steps (clicks by actor name, waits), waits for
 the menu to settle, and saves `build/shots/<scenario>-<dark|light>.png`
 cropped to the menu with a small margin. Scenarios are JSON files under
 `tests/shots/scenarios/`. Synthetic data only.
+
+## Amendment 1 (after wave 1)
+
+1. **IPv4 loopback only.** The app server grants the local principal only
+   for `Host: 127.0.0.1[:port]` (whatdidido `docs/API.md`, rule 2), so
+   `http://[::1]:<port>` is refused for the `app-url` setting and for a
+   discovered `Location` (§3.1). A missing port is refused too.
+2. **Error envelope.** The app server answers errors as
+   `{"error": {"code": "conflict", ...}}`; the client reads both that and a
+   bare string (§3.5).
+3. **PHI and Now dates.** `<d>` in §3.6 is `day.date` when a day is
+   loaded, else this machine's local date.
+4. **Light/dark** (§2.3) follow `Main.getStyleVariant()` (updated on
+   `St.Settings` `notify::color-scheme`), not `color-scheme == 'default'`:
+   on GNOME Shell 50 `default` renders the dark style.
+5. **Interval labels** follow the app's `intervalLabel` exactly (the 90 s
+   stop reads "2 min", like the app).
+6. **Harness hook.** The harness's `BackdatePause` reaches the
+   indicator's `_reminder._pausedSince` and `_render()`; keep those names
+   (or update `tests/shots/wdishots@wporter.org/extension.js` with them).

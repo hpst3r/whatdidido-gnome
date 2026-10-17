@@ -120,7 +120,7 @@ eq('location: absolute loopback 307', appBaseFromLocation(CB, 307, 'http://127.0
 eq('location: 303', appBaseFromLocation(CB, 303, 'http://127.0.0.1:18851/app/'), 'http://127.0.0.1:18851');
 eq('location: 302 any path', appBaseFromLocation(CB, 302, 'http://127.0.0.1:18851/elsewhere?x=1'), 'http://127.0.0.1:18851');
 eq('location: origin only', appBaseFromLocation(CB, 307, 'http://127.0.0.1:18851'), 'http://127.0.0.1:18851');
-eq('location: IPv6 loopback', appBaseFromLocation(CB, 307, 'http://[::1]:18851/app/'), 'http://[::1]:18851');
+eq('location: IPv6 loopback refused', appBaseFromLocation(CB, 307, 'http://[::1]:18851/app/'), null);
 eq('location: relative /app/', appBaseFromLocation(CB, 307, '/app/#/today'), CB);
 eq('location: relative /app/ with a trailing-slash base', appBaseFromLocation(`${CB}/`, 302, '/app/'), CB);
 eq('location: relative other path', appBaseFromLocation(CB, 307, '/day/'), null);
@@ -151,7 +151,8 @@ eq('setting: blank is automatic', parseAppUrlSetting('  '), auto);
 eq('setting: not a string is automatic', parseAppUrlSetting(undefined), auto);
 eq('setting: origin', parseAppUrlSetting('http://127.0.0.1:18851'), ok('http://127.0.0.1:18851'));
 eq('setting: trailing slash', parseAppUrlSetting('http://127.0.0.1:18851/'), ok('http://127.0.0.1:18851'));
-eq('setting: surrounding spaces', parseAppUrlSetting(' http://[::1]:18851/ '), ok('http://[::1]:18851'));
+eq('setting: surrounding spaces', parseAppUrlSetting(' http://127.0.0.1:18851/ '), ok('http://127.0.0.1:18851'));
+eq('setting: IPv6 loopback refused', parseAppUrlSetting('http://[::1]:18851'), bad);
 eq('setting: port leading zero normalized', parseAppUrlSetting('http://127.0.0.1:08851'), ok('http://127.0.0.1:8851'));
 eq('setting: path', parseAppUrlSetting('http://127.0.0.1:18851/app/'), bad);
 eq('setting: query', parseAppUrlSetting('http://127.0.0.1:18851/?x'), bad);
