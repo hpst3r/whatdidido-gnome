@@ -109,6 +109,22 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
             return false;
         });
 
+        // Adw.EntryRow has no subtitle, so the group's description carries it.
+        const appGroup = new Adw.PreferencesGroup({
+            title: 'App server',
+            description: 'Leave empty to find it automatically from the work session. ' +
+                'Otherwise only a local address works: http://127.0.0.1:<port> or http://[::1]:<port>.',
+        });
+        page.add(appGroup);
+        const appUrl = new Adw.EntryRow({title: 'App server URL', show_apply_button: true});
+        appUrl.connect('apply', () => settings.set_string('app-url', appUrl.text.trim()));
+        appGroup.add(appUrl);
+        const syncAppUrl = () => {
+            appUrl.text = settings.get_string('app-url');
+        };
+        ids.push(settings.connect('changed::app-url', syncAppUrl));
+        syncAppUrl();
+
         const bar = new Adw.PreferencesGroup({title: 'Top bar'});
         page.add(bar);
         const showMic = new Adw.SwitchRow({

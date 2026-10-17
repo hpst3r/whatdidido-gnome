@@ -78,6 +78,11 @@ export class FakeControl {
         // Hold POST /window replies (already processed) until releaseWindowReplies().
         this.holdWindowReplies = false;
         this._held = [];
+        // GET /day (the legacy page redirect the app client discovers the app
+        // server from): null leaves /day like any other path; {status,
+        // location} answers that status with that Location (location null:
+        // none), no token needed, like the server's own pages.
+        this.dayRedirect = null;
         this.server = new Soup.Server({});
         this.server.add_handler(null, (_srv, msg, path, query) => this._handle(msg, path, query));
     }
@@ -109,6 +114,13 @@ export class FakeControl {
         const req = {method, path, query: query ? Object.keys(query) : null, headers, body: raw};
         this.requests.push(req);
 
+        if (this.dayRedirect && method === 'GET' && path === '/day' && !query) {
+            msg.set_status(this.dayRedirect.status, null);
+            if (this.dayRedirect.location !== null && this.dayRedirect.location !== undefined)
+                msg.get_response_headers().append('Location', this.dayRedirect.location);
+            msg.set_response('text/plain', Soup.MemoryUse.COPY, new TextEncoder().encode(''));
+            return undefined;
+        }
         if (BROWSER_HEADERS.some(h => h in headers) || query)
             return this._reply(msg, 403, {error: 'forbidden'});
         if (headers['authorization'] !== `Bearer ${this.token}`) {

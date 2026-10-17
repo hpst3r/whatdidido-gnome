@@ -24,6 +24,9 @@ test:
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
 	gjs -m tests/mic_scenarios_test.js $(TEST_RUNTIME)/mic-scenarios
 	gjs -m tests/mic_review_toggle_race_test.js $(TEST_RUNTIME)/mic-toggle-race
+	gjs -m tests/day_model_test.js
+	gjs -m tests/popover_model_test.js
+	gjs -m tests/app_client_test.js $(TEST_RUNTIME)/app-client
 
 # Read-only check against the running server (control.json in $XDG_RUNTIME_DIR).
 live:
