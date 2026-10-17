@@ -1,0 +1,7 @@
+{
+  "extends": "recording-full",
+  "description": "A ticket picked in the Now card: the list folds, the picker shows #4101 and Assign turns sensitive.",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-ticket"}, {"click": "wdi-pop-ticket-item-0"}],
+  "expect_labels": ["#4101", "Assign"]
+}

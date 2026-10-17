@@ -1,0 +1,9 @@
+{
+  "extends": "recording-full",
+  "description": "Click the round Pause button: the menu stays open, the fake switches to paused and the card shows Paused with the accent Resume button.",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-primary"}, {"wait_ms": 600}],
+  "expect_labels": ["Paused"],
+  "expect_requests": [{"method": "POST", "path": "/control/v1/command"}],
+  "expect_status": {"state": "paused"}
+}

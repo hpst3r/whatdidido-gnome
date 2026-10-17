@@ -1,0 +1,8 @@
+{
+  "extends": "recording-full",
+  "description": "Pick #4102 in the Now card and click Assign: the fake saves it, the day is fetched again and the stretch becomes the last entry (#4102 until 5:42 PM).",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-ticket"}, {"click": "wdi-pop-ticket-item-1"}, {"click": "wdi-pop-assign"}, {"wait_ms": 600}],
+  "expect_labels": ["#4102 until 5:42 PM"],
+  "expect_requests": [{"method": "POST", "path": "/api/v1/timesheet/assignments"}]
+}

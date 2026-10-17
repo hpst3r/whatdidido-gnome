@@ -39,7 +39,7 @@ check: test
 
 pack: check
 	mkdir -p build  # gnome-extensions pack segfaults if -o dir is missing
-	cd $(SRC) && gnome-extensions pack --force --extra-source=lib --schema=schemas/$(SCHEMA) -o ../build .
+	cd $(SRC) && gnome-extensions pack --force --extra-source=lib --extra-source=icons --schema=schemas/$(SCHEMA) -o ../build .
 
 # Symlink install for development. GNOME Shell on Wayland only picks up a new
 # extension after re-login (or use `make nested`).

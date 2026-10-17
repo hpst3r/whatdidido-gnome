@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Keyboard: Down three times from the opened menu moves focus Settings, Pause, then (arrows move geometrically) the PHI guard tile below Pause; its focus ring shows.",
+  "tags": ["needs-popover", "keyboard"],
+  "steps": [{"key": "Down"}, {"key": "Down"}, {"key": "Down"}, {"wait_ms": 200}]
+}
