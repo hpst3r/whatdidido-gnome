@@ -1,0 +1,7 @@
+{
+  "extends": "recording-full",
+  "description": "Paused for 12 minutes (the extension's pause start is moved back 12 min).",
+  "tags": ["state"],
+  "control": {"status": {"state": "paused", "audio_state": "pending", "mic": {"state": "pending"}}},
+  "paused_minutes": 12
+}

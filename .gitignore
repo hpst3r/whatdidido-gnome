@@ -1,2 +1,4 @@
 build/
 *.compiled
+# scripts/shots.sh run dirs (private HOME, dconf, logs)
+.shots/

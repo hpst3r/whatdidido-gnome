@@ -1,0 +1,8 @@
+{
+  "uuid": "wdishots@wporter.org",
+  "name": "whatdidido screenshot helper (test only)",
+  "description": "Test-only helper for scripts/shots.sh: D-Bus control of the whatdidido menu inside the isolated headless shell. Never packed or installed.",
+  "shell-version": [
+    "50"
+  ]
+}

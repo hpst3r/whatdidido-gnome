@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Footer after clicking Stop session: Cancel + Stop now.",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-stop"}]
+}

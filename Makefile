@@ -53,3 +53,10 @@ uninstall:
 # the real session is untouched. GNOME 49+ needs mutter-devkit. NESTED_SIZE=WxH.
 nested: install
 	scripts/nested.sh
+
+# Screenshots of the menu in an isolated headless shell (scripts/shots.sh,
+# tests/shots/README.md): build/shots/<scenario>-<dark|light>.png.
+# SCENARIOS="a b" picks some.
+.PHONY: shots
+shots:
+	scripts/shots.sh $(SCENARIOS)

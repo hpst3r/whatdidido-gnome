@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Recovering while the screen is locked (waiting_for_unlock).",
+  "tags": ["state"],
+  "control": {"status": {"state": "recovering", "waiting_for_unlock": true, "audio_state": "pending", "mic": {"state": "pending"}}}
+}

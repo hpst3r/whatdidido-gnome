@@ -1,0 +1,7 @@
+{
+  "extends": "recording-full",
+  "description": "Microphones available, mic off, no saved microphone in settings.",
+  "tags": ["mic"],
+  "control": {"status": {"audio_capturing": false, "audio_state": "off", "mic": {"on": false, "source_id": null, "stable_id": null, "label": null, "state": "off"}}},
+  "settings": {"microphone-stable-id": "", "microphone-id": "", "microphone-label": ""}
+}
