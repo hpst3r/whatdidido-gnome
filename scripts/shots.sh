@@ -26,6 +26,9 @@
 #                       (default America/New_York; fixtures are local times)
 #   SHOTS_EXT_SRC=dir   extension tree to shoot (default ./whatdidido@wporter.org)
 #   SHOTS_KEEP=1        keep the run dir (logs) even when everything passed
+#   SHOTS_SCALE=1|2     monitor scale (default 1). 2: a 2560x1600 virtual
+#                       monitor at scale 2 through a private monitors.xml
+#                       (1280x800 logical); PNGs are in physical pixels
 
 set -euo pipefail
 
@@ -46,6 +49,45 @@ if [[ -z ${SHOTS_INNER:-} ]]; then
     done
     OUT=$REPO/build/shots
     mkdir -p "$OUT"
+
+    SCALE=${SHOTS_SCALE:-1}
+    if [[ $SCALE != 1 && $SCALE != 2 ]]; then
+        echo "SHOTS_SCALE must be 1 or 2 (got '$SCALE')" >&2
+        exit 2
+    fi
+    # The headless virtual monitor (mutter: connector Meta-0, vendor
+    # MetaVendor, product MetaVirtualMonitor, serial 0x00) gets its scale
+    # from the private monitors.xml. GNOME Shell 50 lays it out logically:
+    # the stage and actors stay 1280x800 logical pixels, St's scale factor
+    # stays 1 and the framebuffer (so a screenshot) is 2x. Mutter rejects
+    # <layoutmode>physical</layoutmode> here (the monitor comes up at 1).
+    MON_W=$((1280 * SCALE))
+    MON_H=$((800 * SCALE))
+    cat >"$RUN/config/monitors.xml" <<EOF
+<monitors version="2">
+  <configuration>
+    <logicalmonitor>
+      <x>0</x>
+      <y>0</y>
+      <scale>$SCALE</scale>
+      <primary>yes</primary>
+      <monitor>
+        <monitorspec>
+          <connector>Meta-0</connector>
+          <vendor>MetaVendor</vendor>
+          <product>MetaVirtualMonitor</product>
+          <serial>0x00</serial>
+        </monitorspec>
+        <mode>
+          <width>$MON_W</width>
+          <height>$MON_H</height>
+          <rate>60.000</rate>
+        </mode>
+      </monitor>
+    </logicalmonitor>
+  </configuration>
+</monitors>
+EOF
 
     EXT_DIR=$RUN/data/gnome-shell/extensions
     mkdir -p "$EXT_DIR"
@@ -157,6 +199,7 @@ EOF
         SHOTS_INNER=1 SHOTS_RUN_MARK="$RUN" SHOTS_RUN="$RUN" SHOTS_REPO="$REPO" SHOTS_OUT="$OUT" \
         SHOTS_DEADLINE=$((START + TIMEOUT)) \
         SHOTS_ANIMATIONS="${SHOTS_ANIMATIONS:-}" SHOTS_VARIANTS="${SHOTS_VARIANTS:-}" \
+        SHOTS_SCALE="$SCALE" SHOTS_MONITOR="${MON_W}x${MON_H}" \
         dbus-run-session --config-file="$RUN/dbus/session.conf" \
         -- "$REPO/scripts/shots.sh" "$@" \
         2>>"$RUN/session.log" || status=$?
@@ -227,7 +270,7 @@ FAKES_PID=$!
 
 # A hung shell gets SIGABRT from the driver (JS stack in the log): no core.
 ulimit -c 0
-gnome-shell --headless --wayland --no-x11 --virtual-monitor 1280x800 \
+gnome-shell --headless --wayland --no-x11 --virtual-monitor "$SHOTS_MONITOR" \
     --wayland-display "$DISPLAY_NAME" >"$LOG" 2>&1 &
 SHELL_PID=$!
 echo "gnome-shell pid $SHELL_PID, fakes pid $FAKES_PID, log $LOG"
@@ -259,7 +302,7 @@ cleanup
 trap - EXIT
 
 # Errors from the extension or the helper fail the run.
-BAD_RE='JS ERROR|Extension (whatdidido|wdishots)@wporter\.org:|Could not load extension|Gjs-CRITICAL|wdishots.*(CRITICAL|WARNING)'
+BAD_RE='JS ERROR|Extension (whatdidido|wdishots)@wporter\.org:|Could not load extension|Gjs-CRITICAL|wdishots.*(CRITICAL|WARNING)|tried to allocate a size of -'
 if grep -En "$BAD_RE" "$LOG" >"$RUN/log-errors.txt"; then
     echo "FAIL: errors in the shell log ($LOG):"
     head -n 30 "$RUN/log-errors.txt"

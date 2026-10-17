@@ -8,7 +8,8 @@
 //   gjs -m tests/shots/driver.js <ports-file> <out-dir> [scenario...]
 //
 // Environment: SHOTS_VARIANTS (default "dark light"), SHOTS_ANIMATIONS=1
-// (keep animations), SHOTS_SHELL_PID (hang watchdog), SHOTS_RUN (run dir).
+// (keep animations), SHOTS_SHELL_PID (hang watchdog), SHOTS_RUN (run dir),
+// SHOTS_SCALE (the monitor scale scripts/shots.sh set up; checked here).
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GdkPixbuf from 'gi://GdkPixbuf';
@@ -21,6 +22,7 @@ const TARGET = 'whatdidido@wporter.org';
 const BUS_NAME = 'org.wporter.WdiShots';
 const OBJECT_PATH = '/org/wporter/WdiShots';
 const IFACE = 'org.wporter.WdiShots';
+// Logical pixels; times ctx.scale (stage pixels per logical pixel).
 const MARGIN = 16;
 const CALL_TIMEOUT_MS = 15000;
 const ACTIVE = 1, INACTIVE = 2;  // ExtensionState
@@ -166,6 +168,10 @@ class Admin {
         return this._send('POST', '/scenario', scenario);
     }
 
+    setApp(fixture) {
+        return this._send('POST', '/app', fixture);
+    }
+
     state() {
         return this._send('GET', '/state');
     }
@@ -216,16 +222,17 @@ async function setTargetEnabled(shell, enabled) {
     });
 }
 
-function cropRect(mb) {
+function cropRect(mb, scale) {
     const m = mb.monitor;
     const rs = [mb.menu];
     // The panel button above the menu, when the union still fits.
     if (mb.button)
         rs.push(mb.button);
-    let x0 = Math.min(...rs.map(r => r.x)) - MARGIN;
-    let y0 = Math.min(...rs.map(r => r.y)) - MARGIN;
-    let x1 = Math.max(...rs.map(r => r.x + r.width)) + MARGIN;
-    let y1 = Math.max(...rs.map(r => r.y + r.height)) + MARGIN;
+    const margin = MARGIN * scale;
+    let x0 = Math.min(...rs.map(r => r.x)) - margin;
+    let y0 = Math.min(...rs.map(r => r.y)) - margin;
+    let x1 = Math.max(...rs.map(r => r.x + r.width)) + margin;
+    let y1 = Math.max(...rs.map(r => r.y + r.height)) + margin;
     x0 = Math.max(m.x, x0);
     y0 = Math.max(m.y, y0);
     x1 = Math.min(m.x + m.width, x1);
@@ -235,10 +242,10 @@ function cropRect(mb) {
 
 // Mean luma of the menu's inside (inset so the rounded border and shadow
 // stay out), for the light/dark check.
-function menuLuma(path, crop, menu) {
+function menuLuma(path, crop, menu, scale) {
     const pb = GdkPixbuf.Pixbuf.new_from_file(path);
     const sx = pb.get_width() / crop.width, sy = pb.get_height() / crop.height;
-    const inset = 24;
+    const inset = 24 * scale;
     const x0 = Math.max(0, Math.round((menu.x - crop.x + inset) * sx));
     const y0 = Math.max(0, Math.round((menu.y - crop.y + inset) * sy));
     const x1 = Math.min(pb.get_width(), Math.round((menu.x - crop.x + menu.width - inset) * sx));
@@ -258,8 +265,9 @@ function menuLuma(path, crop, menu) {
 async function runScenario(ctx, sc, variant) {
     const {shell, admin} = ctx;
     const notes = [];
+    const park = ctx.park;
     await shell.call('CloseMenu');
-    await shell.call('PointerMove', '(dd)', PARK);
+    await shell.call('PointerMove', '(dd)', park);
 
     // Fresh extension state per shot: fakes first (control.json present or
     // not), then settings reset and set while the extension is disabled.
@@ -304,6 +312,20 @@ async function runScenario(ctx, sc, variant) {
             await shell.call('Key', '(u)', [keyval]);
         } else if ('wait_ms' in step) {
             await sleep(step.wait_ms);
+        } else if ('focus' in step) {
+            await shell.call('Focus', '(s)', [step.focus]);
+        } else if ('expect_focus' in step) {
+            const f = await shell.json('KeyFocus');
+            if (f.name !== step.expect_focus || !f.inMenu)
+                throw new Failure(`keyboard focus is on ${f.name || f.describe}${f.inMenu ? '' : ' (outside the menu)'}, expected ${step.expect_focus}`);
+            if (!f.focusStyle)
+                throw new Failure(`${f.name} has keyboard focus but no :focus style`);
+        } else if ('app' in step) {
+            // A new day while the menu stays open, fetched at once.
+            await admin.setApp(step.app);
+            if (!await shell.call('RefreshDay'))
+                throw new Failure('RefreshDay: the extension has no day loader');
+            await sleep(200);
         } else {
             throw new Failure(`unknown step ${JSON.stringify(step)}`);
         }
@@ -321,14 +343,19 @@ async function runScenario(ctx, sc, variant) {
         mb = await shell.json('MenuBounds');
     }
     if (!hovering)
-        await shell.call('PointerMove', '(dd)', PARK);
+        await shell.call('PointerMove', '(dd)', park);
     await shell.json('Settle');
     mb = await shell.json('MenuBounds');
-    const crop = cropRect(mb);
+    const crop = cropRect(mb, ctx.scale);
     const path = GLib.build_filenamev([ctx.out, `${sc.name}-${variant}.png`]);
     const settle = await shell.json('Screenshot', '(siiii)', [path, crop.x, crop.y, crop.width, crop.height], 30000);
     if (!settle.settled)
         notes.push(`menu still moving after ${settle.ms} ms`);
+    // Physical pixels: a scale-2 monitor gives a 2x PNG of the crop.
+    const png = GdkPixbuf.Pixbuf.get_file_info(path);
+    const want = [Math.round(crop.width * ctx.pixels), Math.round(crop.height * ctx.pixels)];
+    if (png[1] !== want[0] || png[2] !== want[1])
+        throw new Failure(`PNG is ${png[1]}x${png[2]}, expected ${want[0]}x${want[1]} (crop ${crop.width}x${crop.height})`);
 
     const labels = await shell.json('MenuLabels');
     for (const want of sc.expect_labels ?? []) {
@@ -383,13 +410,28 @@ async function main() {
     const animations = GLib.getenv('SHOTS_ANIMATIONS') === '1';
     await shell.call('SetInterface', '(ss)', ['enable-animations', String(animations)]);
     await shell.call('SetInterface', '(ss)', ['enable-hot-corners', 'false']);
-    await shell.call('SetInterface', '(ss)', ['clock-format', "'12h'"]);    // Warm-up: the first virtual pointer events after startup can be lost.
-    for (const [x, y] of [[100, 400], [640, 400], PARK])
+    await shell.call('SetInterface', '(ss)', ['clock-format', "'12h'"]);
+    // The monitor scripts/shots.sh asked for must be the one the shell uses.
+    // `scale` (St's) is stage pixels per logical pixel: 1 in GNOME 50's
+    // logical layout, where the framebuffer scales instead; `pixels` is PNG
+    // pixels per stage pixel. Both hold in a physical layout too.
+    const {scale, stage, monitorScale} = await shell.json('Status');
+    const wantScale = Number(GLib.getenv('SHOTS_SCALE') || 1);
+    if (monitorScale !== wantScale || stage.width * monitorScale !== 1280 * wantScale * scale) {
+        throw new Error(`SHOTS_SCALE=${wantScale}: got monitor scale ${monitorScale}, St scale ${scale}, ` +
+            `stage ${stage.width}x${stage.height}`);
+    }
+    const pixels = monitorScale / scale;
+    const park = PARK.map(v => v * scale);
+    // Warm-up: the first virtual pointer events after startup can be lost.
+    for (const [x, y] of [[100 * scale, 400 * scale], [640 * scale, 400 * scale], park])
         await shell.call('PointerMove', '(dd)', [x, y]);
     await sleep(200);
-    print(`shell ready in ${Math.round(nowMs() - t0)} ms (animations ${animations ? 'on' : 'off'})`);
+    print(`shell ready in ${Math.round(nowMs() - t0)} ms (animations ${animations ? 'on' : 'off'}, ` +
+        `monitor scale ${monitorScale}, St scale ${scale}, ` +
+        `stage ${stage.width}x${stage.height})`);
 
-    const ctx = {shell, admin, out, keyval: name => {
+    const ctx = {shell, admin, out, scale, pixels, park, keyval: name => {
         if (!(name in KEYVALS))
             throw new Failure(`unknown key ${name} (use a keyval number or one of ${Object.keys(KEYVALS).join(', ')})`);
         return KEYVALS[name];
@@ -428,7 +470,7 @@ async function main() {
             const l = results.find(r => r.name === sc.name && r.variant === 'light');
             if (d.status !== 'PASS' || l.status !== 'PASS')
                 continue;
-            const ld = menuLuma(d.path, d.crop, d.menu), ll = menuLuma(l.path, l.crop, l.menu);
+            const ld = menuLuma(d.path, d.crop, d.menu, scale), ll = menuLuma(l.path, l.crop, l.menu, scale);
             const line = `luma ${sc.name}: dark ${ld.toFixed(0)} light ${ll.toFixed(0)}`;
             if (!(ll - ld > 40)) {
                 for (const r of [d, l]) {

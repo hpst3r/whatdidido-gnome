@@ -25,7 +25,14 @@ Environment: `SHOTS_TIMEOUT` (whole run, default 600 s), `SHOTS_ANIMATIONS=1`
 `SHOTS_TZ` (default `America/New_York`), `SHOTS_EXT_SRC` (another extension
 tree), `SHOTS_KEEP=1` (keep the run dir `.shots/run-*/` with
 `gnome-shell.log`, `fakes.log`, `session.log`; it is always kept when a run
-fails).
+fails), `SHOTS_SCALE=2` (a 2560x1600 virtual monitor at scale 2, through a
+private `monitors.xml`; default 1).
+
+HiDPI: GNOME Shell 50 lays the scale-2 monitor out logically, so the stage
+stays 1280x800 and St's scale factor stays 1 while the framebuffer, and so
+every PNG, is 2x (mutter rejects a physical layout for the virtual monitor).
+Crops are computed in stage pixels and each PNG must come out at monitor
+scale / St scale times the crop, or the shot fails.
 
 Checks done on every run, besides each scenario's own expectations:
 
@@ -33,7 +40,9 @@ Checks done on every run, besides each scenario's own expectations:
   more than 40 (of 255) higher in light than in dark. Light is
   `color-scheme 'prefer-light'`: GNOME 50's user session mode is
   `prefer-dark`, so `'default'` keeps the dark shell style;
-- no `JS ERROR`, extension error or helper warning in the shell log;
+- no `JS ERROR`, extension error, helper warning or negative-size
+  allocation in the shell log;
+- the shell runs at the `SHOTS_SCALE` asked for;
 - the host's `~/.config/dconf/user` mtime is unchanged.
 
 `gjs -m tests/shots/fakes_test.js <scratch-dir>` checks the fakes alone.
@@ -49,7 +58,7 @@ Checks done on every run, besides each scenario's own expectations:
 | `microphones` | `GET /control/v1/microphones` items (`id`, `label`, `stable_id`) |
 | `app` | the timesheet day fixture, `{"timesheet": false}` (day answers 404) or `null` (same) |
 | `settings` | the extension's settings (JSON values; set after a reset to the schema defaults) |
-| `steps` | `{"click": "<actor name>"}`, `{"clickLabel": "<label text>"}`, `{"hover": "<actor name>"}`, `{"key": "Escape"}` (or a keyval number), `{"wait_ms": 500}` |
+| `steps` | `{"click": "<actor name>"}`, `{"clickLabel": "<label text>"}`, `{"hover": "<actor name>"}`, `{"key": "Escape"}` (or a keyval number), `{"wait_ms": 500}`, `{"focus": "<actor name>"}` (keyboard focus there, for deep controls), `{"expect_focus": "<actor name>"}` (fails unless that menu actor has keyboard focus and its `:focus` style), `{"app": {...}}` (a new day fixture while the menu stays open, fetched at once) |
 | `tags` | `needs-popover`: SKIP unless the menu has an actor named `wdi-pop`; `old-menu`: for today's menu, drop with it |
 | `paused_minutes` | move the extension's pause start back (the paused-for text) |
 | `expect_labels` | label texts that must be visible in the menu |
@@ -73,7 +82,8 @@ the extension asks for, in `$TZ`, so a shot looks the same on any run date:
 The fake derives the rest of the `TimesheetDay` (`span`, `intervals`,
 `unassigned` = segment time no entry covers, `totals`, ...). An Assign
 (`POST /api/v1/timesheet/assignments`, exactly the seven keys) answers 201,
-is recorded and turns that stretch into an entry. Commands, `mic` and
+is recorded and turns that stretch into an entry. The admin's `POST /app`
+replaces only the day fixture (the `app` step). Commands, `mic` and
 `interval` change the fake's status (pause → paused, resume and start →
 recording, stop → stopped).
 
@@ -99,7 +109,8 @@ items do), it is opened again first.
 gvariantText)`, `ResetSettings`, `SetInterface(key, gvariantText)`,
 `SetEnabled(uuid, enabled)`, `MenuBounds`, `MenuLabels`,
 `FindActors(prefix)`, `Settle`, `Screenshot(path, x, y, w, h)`,
-`BackdatePause(ms)`, `HideOverview`, `Log`. `OpenMenu` first drops every
+`BackdatePause(ms)`, `Focus(name)`, `KeyFocus`, `RefreshDay`,
+`HideOverview`, `Log`. `OpenMenu` first drops every
 notification source, so no startup banner shows behind the menu.
 
 Shots repeat pixel for pixel between runs, except a crop wider than about

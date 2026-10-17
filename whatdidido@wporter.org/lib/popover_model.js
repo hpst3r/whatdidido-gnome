@@ -27,6 +27,25 @@ import {
 /** The app's interval stops (seconds), 5 s .. 1 h. */
 export const INTERVAL_STEPS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 300, 600, 900, 1800, 3600];
 
+/** How long a committed stop is held while no status reports it (Amendment 2.3). */
+export const INTERVAL_HOLD_MS = 3000;
+
+/**
+ * The stop the slider keeps after a commit (POPOVER.md Amendment 2.3): the
+ * held index until a status reports its seconds or its deadline passes.
+ * @param {{index: number, seconds: number, until: number}|null} hold
+ * @param {number|null} sessionSeconds the status's interval_seconds
+ * @param {number} nowMs the clock `until` is on
+ * @returns {number|null} the index to show, or null (the hold is over)
+ */
+export function heldIndex(hold, sessionSeconds, nowMs) {
+    if (!hold || !Number.isInteger(hold.index) || hold.index < 0 || hold.index >= INTERVAL_STEPS.length)
+        return null;
+    if (sessionSeconds === hold.seconds || !(nowMs < hold.until))
+        return null;
+    return hold.index;
+}
+
 /**
  * The app's interval label (core/time.ts): "5 s", "2 min", "1 h", "1.5 h".
  * Minutes are rounded, so 90 s is "2 min", as in the app.
@@ -270,12 +289,14 @@ function inputBlock(status, running, micView, mics, micChoiceLabel, expanded) {
     };
 }
 
-function intervalBlock(status, running, dragIndex, intervalBusy) {
+function intervalBlock(status, running, dragIndex, hold, nowMs, intervalBusy) {
     const max = INTERVAL_STEPS.length - 1;
     const dragging = Number.isInteger(dragIndex) && dragIndex >= 0 && dragIndex <= max;
     const seconds = running ? status.interval_seconds : null;
-    const index = dragging ? dragIndex : nearestStep(seconds);
-    const value = dragging ? intervalLabel(INTERVAL_STEPS[dragIndex]) : intervalLabel(seconds);
+    const held = dragging || !running ? null : heldIndex(hold, seconds, nowMs);
+    const shown = dragging ? dragIndex : held;
+    const index = shown !== null ? shown : nearestStep(seconds);
+    const value = shown !== null ? intervalLabel(INTERVAL_STEPS[shown]) : intervalLabel(seconds);
     return {
         name: 'wdi-pop-interval',
         visible: running,
@@ -286,8 +307,10 @@ function intervalBlock(status, running, dragIndex, intervalBusy) {
         index,
         max,
         fraction: index / max,
-        seconds: dragging ? INTERVAL_STEPS[dragIndex] : seconds,
+        seconds: shown !== null ? INTERVAL_STEPS[shown] : seconds,
+        sessionSeconds: seconds,
         dragging,
+        holding: held !== null,
         sensitive: running && LIVE_STATES.includes(status.state) && !intervalBusy,
     };
 }
@@ -473,6 +496,7 @@ function footerBlock(status, running, ui) {
  *   expanded: 'input' | 'ticket' | null; ticket: the picked ticket ('' none);
  *   assignBusy: bool; assignError: string|null (assignErrorText); stopConfirm: bool;
  *   dragIndex: index into INTERVAL_STEPS while dragging or committing, else null;
+ *   hold: {index, seconds, until (nowMs clock)} after a commit, else null (heldIndex);
  *   intervalBusy: bool; commandBusy: bool (a start/pause/resume/stop in flight);
  *   hoverBar: index of the hovered or focused Today bar, else null
  * @returns {object} Every interactive part has `name` (its frozen actor name,
@@ -488,8 +512,8 @@ function footerBlock(status, running, ui) {
  *            window: {name, visible, title, subtitle, icon, on, accent, sensitive, action, accessibleName}}
  *   input   {name, visible, title, value, expanded, sensitive, action, accessibleName, emptyText (or null),
  *            items: [{index, name, label, checked, accessibleName, action}]}
- *   interval {name, visible, title, value, steps, index, max, fraction (0..1), seconds, dragging,
- *            sensitive, accessibleName}
+ *   interval {name, visible, title, value, steps, index, max, fraction (0..1), seconds (shown),
+ *            sessionSeconds (the status's), dragging, holding, sensitive, accessibleName}
  *   now     {name, visible, dimmed, overline, error (or null),
  *            focus: null | {appId, appName, title, initials, accessibleName, sensitive, link},
  *            stretch: null | {start, end, text,
@@ -546,7 +570,7 @@ export function popoverView(status, opts = {}) {
             window: windowTile(win, running),
         },
         input: inputBlock(status, running, micView, mics, micChoiceLabel, ui.expanded),
-        interval: intervalBlock(status, running, ui.dragIndex, !!ui.intervalBusy),
+        interval: intervalBlock(status, running, ui.dragIndex, ui.hold ?? null, nowMs, !!ui.intervalBusy),
         now: nowBlock(day, base, running && status.state === 'recording', use24h, ui),
         today: todayBlock(day, base, use24h, variant, ui.hoverBar),
         open: {

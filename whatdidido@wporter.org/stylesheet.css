@@ -109,6 +109,16 @@
 
 /* interval slider */
 .wdi-pop-slider { height: 22px; }
+/* The focus ring, like the shell's quick-settings slider; the padding keeps
+   the handle inside it at either end. */
+.wdi-pop-slider-bin {
+  padding: 0 4px;
+  border-radius: 11px;
+}
+.wdi-pop-slider-bin:focus {
+  box-shadow: inset 0 0 0 2px st-transparentize(-st-accent-color, 0.2);
+  background-color: st-transparentize(-st-accent-color, 0.9);
+}
 
 /* Now card */
 .wdi-pop-overline {

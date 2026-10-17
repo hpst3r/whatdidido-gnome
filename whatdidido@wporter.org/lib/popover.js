@@ -21,8 +21,11 @@ import St from 'gi://St';
 import {ensureActorVisibleInScrollView} from 'resource:///org/gnome/shell/misc/animationUtils.js';
 import {Slider} from 'resource:///org/gnome/shell/ui/slider.js';
 
+import {INTERVAL_HOLD_MS} from './popover_model.js';
+
 const STOP_CONFIRM_MS = 4000;     // "Cancel" + "Stop now" go back to "Stop session"
 const KEY_COMMIT_MS = 600;        // keyboard/scroll interval changes commit after this pause
+const CLEAN_UI = {expanded: null, ticket: '', stopConfirm: false, dragIndex: null, hold: null, hoverBar: null};
 const PRESS_SCALE = 0.96;
 const PRESS_MS = 150;
 const PULSE_MS = 1200;            // half of the 2.4 s cycle (auto-reversed)
@@ -80,12 +83,16 @@ export class Popover {
         this._onAction = onAction;
         this._onLink = onLink;
         this._changed = changed;
-        this._ui = {expanded: null, ticket: '', stopConfirm: false, dragIndex: null, hoverBar: null};
+        this._ui = {...CLEAN_UI};
         this._view = null;
         this._open = false;
         this._destroyed = false;
         this._stopTimer = 0;
         this._commitTimer = 0;
+        this._holdTimer = 0;
+        this._updating = false;     // inside update(): widget signals must not render again
+        this._dirty = false;        // ...but ask for one render after it
+        this._dirtyId = 0;
         this._sliderSync = false;
         this._sliderDragging = false;
         this._scrollAcc = 0;
@@ -133,15 +140,21 @@ export class Popover {
     }
 
     // The menu opened or closed: the pulse runs only while open; closing
-    // forgets the widget state, so the next open starts clean.
+    // commits a pending interval stop at once (Amendment 2.2) and forgets the
+    // widget state, so the next open starts clean.
     setOpen(open) {
         if (this._destroyed)
             return;
         this._open = open;
         if (!open) {
             this._clearStopTimer();
+            if (this._commitTimer || this._sliderDragging) {
+                this._sliderDragging = false;
+                this._commitInterval();
+            }
             this._clearCommitTimer();
-            this._ui = {expanded: null, ticket: '', stopConfirm: false, dragIndex: null, hoverBar: null};
+            this._clearHoldTimer();
+            this._ui = {...CLEAN_UI};
             this._sliderDragging = false;
         }
         this._syncPulse();
@@ -151,6 +164,10 @@ export class Popover {
         this._destroyed = true;
         this._clearStopTimer();
         this._clearCommitTimer();
+        this._clearHoldTimer();
+        if (this._dirtyId)
+            GLib.source_remove(this._dirtyId);
+        this._dirtyId = 0;
         this._dot.remove_all_transitions();
         this.actor.destroy();
     }
@@ -288,6 +305,12 @@ export class Popover {
         this._slider.name = 'wdi-pop-interval';
         this._slider.add_style_class_name('wdi-pop-slider');
         this._keepVisible(this._slider);
+        // The slider (an St.DrawingArea) paints no background or shadow of
+        // its own: its focus ring is drawn by this bin (Amendment 2.4).
+        this._slider.x_expand = true;
+        this._sliderBin = new St.Bin({style_class: 'wdi-pop-slider-bin', child: this._slider, x_expand: true});
+        this._slider.connect('key-focus-in', () => this._sliderBin.add_style_pseudo_class('focus'));
+        this._slider.connect('key-focus-out', () => this._sliderBin.remove_style_pseudo_class('focus'));
         this._slider.connect('notify::value', () => this._sliderMoved());
         this._slider.connect('drag-begin', () => {
             this._sliderDragging = true;
@@ -325,7 +348,7 @@ export class Popover {
             return Clutter.EVENT_STOP;
         });
         this._interval.add_child(row);
-        this._interval.add_child(this._slider);
+        this._interval.add_child(this._sliderBin);
         this._content.add_child(this._interval);
     }
 
@@ -334,7 +357,8 @@ export class Popover {
         this._nowOver = label('wdi-pop-overline');
         this._now.add_child(this._nowOver);
 
-        const row = hbox('wdi-pop-now-row');
+        // x_expand: a short title stays left, not centered in the button.
+        const row = hbox('wdi-pop-now-row', {x_expand: true});
         this._appIconBin = new St.Bin({style_class: 'wdi-pop-app-icon', y_align: Clutter.ActorAlign.CENTER});
         this._appInitials = label('wdi-pop-app-initials', {x_align: Clutter.ActorAlign.CENTER});
         const text = vbox('wdi-pop-now-text', {x_expand: true, y_align: Clutter.ActorAlign.CENTER});
@@ -494,6 +518,22 @@ export class Popover {
         this._commitTimer = 0;
     }
 
+    _clearHoldTimer() {
+        if (this._holdTimer)
+            GLib.source_remove(this._holdTimer);
+        this._holdTimer = 0;
+    }
+
+    // Widget state changed. Inside update() (a focus move, a list rebuilt)
+    // the render waits for the next idle, so update() never re-enters.
+    _uiChanged() {
+        if (!this._updating) {
+            this._changed();
+            return;
+        }
+        this._dirty = true;
+    }
+
     _sliderIndex() {
         const max = this._view?.interval.max ?? 1;
         return Math.max(0, Math.min(max, Math.round(this._slider.value * max)));
@@ -528,7 +568,8 @@ export class Popover {
     }
 
     // Sends the shown stop once; the dragged label stays until the request
-    // settles, then the session's value shows again.
+    // settles. A saved stop is then held until a status reports it or
+    // INTERVAL_HOLD_MS pass (Amendment 2.3), so it never snaps back for one poll.
     async _commitInterval() {
         this._clearCommitTimer();
         const index = this._ui.dragIndex;
@@ -536,14 +577,26 @@ export class Popover {
         if (index === null || !iv)
             return;
         const seconds = iv.steps[index];
-        if (iv.sensitive && seconds !== this._sessionSeconds) {
+        let saved = false;
+        if (iv.sensitive && seconds !== iv.sessionSeconds) {
             try {
-                await this._onAction({action: 'interval', seconds});
+                saved = await this._onAction({action: 'interval', seconds}) !== false;
             } catch {}
         }
         if (this._destroyed || this._ui.dragIndex !== index || this._sliderDragging)
             return;
         this._ui.dragIndex = null;
+        this._clearHoldTimer();
+        this._ui.hold = null;
+        if (saved) {
+            this._ui.hold = {index, seconds, until: Date.now() + INTERVAL_HOLD_MS};
+            // One render after the deadline drops the hold if no status came.
+            this._holdTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, INTERVAL_HOLD_MS + 50, () => {
+                this._holdTimer = 0;
+                this._changed();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
         this._changed();
     }
 
@@ -552,6 +605,28 @@ export class Popover {
     update(view) {
         if (this._destroyed)
             return;
+        // A render asked for from inside this one (Amendment 2.5) runs after it.
+        if (this._updating) {
+            this._dirty = true;
+            return;
+        }
+        this._updating = true;
+        try {
+            this._update(view);
+        } finally {
+            this._updating = false;
+        }
+        if (this._dirty && !this._dirtyId) {
+            this._dirtyId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._dirtyId = 0;
+                this._changed();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+        this._dirty = false;
+    }
+
+    _update(view) {
         this._view = view;
         for (const c of ['wdi-light', 'wdi-dark'])
             setClass(this._content, c, c === view.styleClass);
@@ -708,11 +783,16 @@ export class Popover {
         this._interval.visible = iv.visible;
         this._intervalTitle.text = iv.title;
         this._intervalValue.text = iv.value;
-        this._sessionSeconds = iv.dragging ? this._sessionSeconds : iv.seconds;
+        // The hold is over (a status reported it, or its time ran out).
+        if (this._ui.hold && !iv.holding) {
+            this._ui.hold = null;
+            this._clearHoldTimer();
+        }
         this._slider.accessible_name = `${iv.accessibleName}: ${iv.value}`;
         setSensitive(this._slider, iv.sensitive);
         // The shell's slider has no insensitive style of its own.
-        this._slider.opacity = iv.sensitive ? 255 : 115;        if (!this._sliderDragging) {
+        this._slider.opacity = iv.sensitive ? 255 : 115;
+        if (!this._sliderDragging) {
             this._sliderSync = true;
             this._slider.value = iv.fraction;
             this._sliderSync = false;
@@ -800,7 +880,7 @@ export class Popover {
                 this._ui.hoverBar = null;
             else
                 return;
-            this._changed();
+            this._uiChanged();
         };
         b.connect('notify::hover', () => hover(b.hover));
         b.connect('key-focus-in', () => hover(true));
@@ -817,12 +897,24 @@ export class Popover {
         this._today.visible = today.visible;
         this._todayTitle.text = today.title;
         this._todayLabel.text = today.label;
-        // The bucket count changes every 15 minutes; colors and heights in place.
+        // The bucket count changes every 15 minutes; colors and heights in
+        // place. A focused bar hands focus to the bar at its index (or the
+        // last bar), else to the Today block (Amendment 2.5).
         const children = this._bars.get_children();
         if (children.length !== today.bars.length) {
+            const focused = children.findIndex(c => c.has_key_focus());
             this._bars.destroy_all_children();
             for (const bar of today.bars)
                 this._bars.add_child(this._bar(bar));
+            if (focused >= 0 && this._open) {
+                const next = this._bars.get_child_at_index(Math.min(focused, today.bars.length - 1));
+                if (next?.mapped)
+                    next.grab_key_focus();
+                else if (this._today.mapped)
+                    this._today.grab_key_focus();
+                else
+                    this._openButton.grab_key_focus();
+            }
         }
         // Like the app: while one bar is hovered or focused, the others fade.
         const hovered = Number.isInteger(this._ui.hoverBar) && this._ui.hoverBar < today.bars.length;

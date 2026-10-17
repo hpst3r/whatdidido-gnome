@@ -89,6 +89,11 @@ const IFACE_XML = `
       <arg name="ms" type="u" direction="in"/>
       <arg type="b" direction="out"/>
     </method>
+    <method name="Focus">
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="KeyFocus"><arg type="s" direction="out"/></method>
+    <method name="RefreshDay"><arg type="b" direction="out"/></method>
     <method name="Log">
       <arg name="message" type="s" direction="in"/>
     </method>
@@ -228,6 +233,11 @@ class ShotsService {
             styleVariant: Main.getStyleVariant(),
             enableAnimations: St.Settings.get().enable_animations,
             indicator: Boolean(this._indicator()),
+            // St's scale factor: the stage, actor bounds and crops are in
+            // physical pixels (no scale-monitor-framebuffer).
+            scale: St.ThemeContext.get_for_stage(global.stage).scale_factor,
+            stage: {width: global.stage.width, height: global.stage.height},
+            monitorScale: Main.layoutManager.primaryMonitor?.geometry_scale ?? null,
             extensions,
         });
     }
@@ -517,6 +527,37 @@ class ShotsService {
             return false;
         reminder._pausedSince -= ms;
         indicator._render?.();
+        return true;
+    }
+
+    // Test-only: keyboard focus on a named actor of the open menu (a deep
+    // control the keyboard would need many Tabs to reach).
+    Focus(name) {
+        const actor = this._named(name);
+        if (!actor.is_mapped() || !actor.can_focus)
+            throw new Error(`${name} is not visible or cannot take focus`);
+        actor.grab_key_focus();
+    }
+
+    // The actor with keyboard focus: its name (or its nearest named
+    // ancestor's, as "in <name>") and whether it shows the :focus style.
+    KeyFocus() {
+        const actor = global.stage.get_key_focus();
+        return JSON.stringify({
+            name: actor?.get_name() || '',
+            describe: describe(actor),
+            focusStyle: Boolean(actor?.has_style_pseudo_class?.('focus')),
+            inMenu: Boolean(actor && this._indicator()?.menu.isOpen && isAncestor(this._openMenuActor(), actor)),
+        });
+    }
+
+    // Test-only poke: fetch the timesheet day now instead of after the
+    // extension's refresh period. False when the extension has no such path.
+    RefreshDay() {
+        const indicator = this._extension()?.stateObj?._indicator;
+        if (typeof indicator?._loadDay !== 'function')
+            return false;
+        indicator._loadDay();
         return true;
     }
 
