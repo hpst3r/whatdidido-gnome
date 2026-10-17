@@ -1,0 +1,9 @@
+{
+  "extends": "recording-full",
+  "description": "Click the middle of the interval slider: the thumb jumps to the 90 s stop, one interval request commits on release, and the card subtitle reads every 2 min (the app's label for 90 s).",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-interval"}, {"wait_ms": 800}],
+  "expect_labels": ["3 monitors · every 2 min · mic on"],
+  "expect_requests": [{"method": "POST", "path": "/control/v1/interval"}],
+  "expect_status": {"interval_seconds": 90}
+}

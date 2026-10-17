@@ -1,0 +1,7 @@
+{
+  "extends": "mic-unset",
+  "description": "Mic off with no saved microphone; clicking the mic tile asks to choose: the input list expands in place with the Choose a microphone notice, nothing is sent.",
+  "tags": ["needs-popover", "click", "mic"],
+  "steps": [{"click": "wdi-pop-mic"}, {"wait_ms": 300}],
+  "expect_labels": ["Choose a microphone", "USB Desk Microphone", "Built-in Audio Analog Stereo"]
+}

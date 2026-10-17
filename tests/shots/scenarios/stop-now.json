@@ -1,0 +1,8 @@
+{
+  "extends": "recording-full",
+  "description": "Stop session, then Stop now: the fake stops; the card shows Stopped with the Start button and the footer has no Stop link.",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-stop"}, {"click": "wdi-pop-stop-confirm"}, {"wait_ms": 600}],
+  "expect_labels": ["Stopped"],
+  "expect_status": {"state": "stopped"}
+}
