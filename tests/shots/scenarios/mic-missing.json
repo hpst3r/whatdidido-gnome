@@ -1,0 +1,7 @@
+{
+  "extends": "recording-full",
+  "description": "Mic off; the saved microphone (Conference Speakerphone) is not in the inventory.",
+  "tags": ["mic"],
+  "control": {"status": {"audio_capturing": false, "audio_state": "off", "mic": {"on": false, "source_id": null, "stable_id": null, "label": null, "state": "off"}}},
+  "settings": {"microphone-stable-id": "alsa_input.usb-Example_Speakerphone-00.mono-fallback", "microphone-id": "77", "microphone-label": "Conference Speakerphone"}
+}

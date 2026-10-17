@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Input picker expanded (sources listed, the current one checked).",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-input"}]
+}

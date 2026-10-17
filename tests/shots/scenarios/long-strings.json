@@ -1,0 +1,16 @@
+{
+  "extends": "recording-full",
+  "description": "Long app name, window title and microphone label (ellipsizing, fixed width).",
+  "tags": ["layout"],
+  "control": {"status": {"mic": {"label": "Professional Studio Condenser Microphone with Headphone Amplifier (USB Audio Class 2.0)"}}},
+  "microphones": [
+    {"id": "52", "label": "Professional Studio Condenser Microphone with Headphone Amplifier (USB Audio Class 2.0)", "stable_id": "alsa_input.usb-Example_Desk_Mic-00.mono-fallback"},
+    {"id": "48", "label": "Built-in Audio Analog Stereo", "stable_id": "alsa_input.pci-0000_00_1f.3.analog-stereo"}
+  ],
+  "settings": {"microphone-label": "Professional Studio Condenser Microphone with Headphone Amplifier (USB Audio Class 2.0)"},
+  "app": {
+    "windows": {
+      "sd": {"app_id": "org.example.ServiceDeskManagementConsole.desktop", "app_name": "Service Desk Enterprise Management Console for Managed Service Providers", "title": "#4101 — Printer VLAN / DHCP scope exhaustion on the third floor after the switch replacement — Contoso Pharmaceuticals (Northeast Region)"}
+    }
+  }
+}

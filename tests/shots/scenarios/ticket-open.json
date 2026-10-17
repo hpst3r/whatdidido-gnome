@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Now card ticket picker expanded.",
+  "tags": ["needs-popover", "click"],
+  "steps": [{"click": "wdi-pop-ticket"}]
+}

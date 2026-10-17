@@ -1,0 +1,9 @@
+{
+  "extends": "recording-full",
+  "description": "Today's menu: a real click on Pause; the fake switches to paused and the reopened menu shows Paused. Drop with the old menu.",
+  "tags": ["old-menu", "click"],
+  "steps": [{"clickLabel": "Pause"}],
+  "expect_labels": ["Paused"],
+  "expect_requests": [{"method": "POST", "path": "/control/v1/command"}],
+  "expect_status": {"state": "paused"}
+}

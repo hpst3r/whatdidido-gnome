@@ -1,0 +1,77 @@
+{
+  "description": "Recording on 3 monitors every 5 s, mic on (USB Desk Microphone), 3 PHI frames withheld, window activity on; a full day of buckets with 4 tickets, idle and a paused stretch, unassigned since 5:00 PM.",
+  "tags": ["state"],
+  "control": {
+    "status": {
+      "state": "recording",
+      "monitors": 3,
+      "samples": 19872,
+      "pending": 2,
+      "interval_seconds": 5,
+      "last_error": null,
+      "reason": null,
+      "waiting_for_unlock": false,
+      "describe_withheld": 3,
+      "audio_capturing": true,
+      "audio_state": "capturing",
+      "audio_restarts": 0,
+      "transcription_enabled": true,
+      "transcription_completed": 40,
+      "transcription_with_text": 31,
+      "mic": {
+        "available": true,
+        "on": true,
+        "source_id": "52",
+        "stable_id": "alsa_input.usb-Example_Desk_Mic-00.mono-fallback",
+        "label": "USB Desk Microphone",
+        "state": "capturing",
+        "remembered": false
+      },
+      "window_activity": {"available": true, "recorded": 214, "dropped": 0, "epoch": 3}
+    }
+  },
+  "microphones": [
+    {"id": "52", "label": "USB Desk Microphone", "stable_id": "alsa_input.usb-Example_Desk_Mic-00.mono-fallback"},
+    {"id": "48", "label": "Built-in Audio Analog Stereo", "stable_id": "alsa_input.pci-0000_00_1f.3.analog-stereo"}
+  ],
+  "settings": {
+    "microphone-stable-id": "alsa_input.usb-Example_Desk_Mic-00.mono-fallback",
+    "microphone-id": "52",
+    "microphone-label": "USB Desk Microphone",
+    "report-active-window": true,
+    "pause-reminder-minutes": 0,
+    "mic-reminder-minutes": 0
+  },
+  "app": {
+    "now": "17:42",
+    "windows": {
+      "sd": {"app_id": "org.example.ServiceDesk.desktop", "app_name": "Service Desk", "title": "#4101 — Printer VLAN / DHCP scope — Contoso"},
+      "web": {"app_id": "org.example.Browser.desktop", "app_name": "Browser", "title": "Fabrikam wiki — Backup rotation"},
+      "term": {"app_id": "org.example.Terminal.desktop", "app_name": "Terminal", "title": "ssh fs01.northwind.example"},
+      "rdp": {"app_id": "org.example.Remote.desktop", "app_name": "Remote Desktop", "title": "DC02 — Tailspin Toys"}
+    },
+    "segments": [
+      ["08:00", "09:30", "active", "sd"],
+      ["09:30", "09:45", "idle", null],
+      ["09:45", "11:30", "active", "web"],
+      ["11:30", "12:15", "paused", null],
+      ["12:15", "14:00", "active", "term"],
+      ["14:00", "14:20", "idle", null],
+      ["14:20", "17:00", "active", "rdp"],
+      ["17:00", "17:42", "active", "sd"]
+    ],
+    "entries": [
+      {"start": "08:00", "end": "09:30", "ticket": "#4101", "client": "Contoso", "category": "Network", "billable": true},
+      {"start": "09:45", "end": "11:30", "ticket": "#4102", "client": "Fabrikam", "category": "Backup", "billable": true},
+      {"start": "12:15", "end": "14:00", "ticket": "#4107", "client": "Northwind", "category": "Server", "billable": false},
+      {"start": "14:20", "end": "17:00", "ticket": "#4110", "client": "Tailspin Toys", "category": "Identity", "billable": true}
+    ],
+    "tickets": ["#4101", "#4102", "#4107"],
+    "ticket_defaults": [
+      {"ticket": "#4101", "client": "Contoso", "category": "Network", "billable": true},
+      {"ticket": "#4102", "client": "Fabrikam", "category": "Backup", "billable": true},
+      {"ticket": "#4107", "client": "Northwind", "category": "Server", "billable": false}
+    ]
+  },
+  "steps": []
+}

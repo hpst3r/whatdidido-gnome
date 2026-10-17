@@ -1,0 +1,9 @@
+{
+  "description": "No work session server: no control.json, no app server.",
+  "tags": ["state"],
+  "control": null,
+  "microphones": [],
+  "settings": {"pause-reminder-minutes": 0, "mic-reminder-minutes": 0},
+  "app": null,
+  "steps": []
+}

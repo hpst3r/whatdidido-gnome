@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Recording; the app server runs without --timesheet (day answers 404): no Now card, no Today bars.",
+  "tags": ["state"],
+  "app": {"timesheet": false}
+}
