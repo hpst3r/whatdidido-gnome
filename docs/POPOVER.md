@@ -277,3 +277,23 @@ cropped to the menu with a small margin. Scenarios are JSON files under
 6. **Harness hook.** The harness's `BackdatePause` reaches the
    indicator's `_reminder._pausedSince` and `_render()`; keep those names
    (or update `tests/shots/wdishots@wporter.org/extension.js` with them).
+
+## Amendment 2 (after the adversarial review)
+
+1. **No redirects anywhere.** Every app-server request (`day`, `assign`)
+   is sent with `Soup.MessageFlags.NO_REDIRECT`, like discovery. A 3xx is
+   an ordinary failure (`HTTP 302`): logged once, Now card and Today bars
+   hidden. (Review: high, a redirect sent the day request off 127.0.0.1.)
+2. **A pending interval change is committed, not dropped.** Closing the
+   menu while the keyboard/scroll commit timer runs commits the pending
+   stop at once (§4.6).
+3. **After a commit the slider keeps the committed stop** until a status
+   reports that value or 3 s pass, so it never snaps back for one poll.
+4. **Visible keyboard focus on the slider** in both variants (accent ring
+   on the handle or a focus outline on its block), like the other controls.
+5. **Rebuilding the Today bars never re-enters the render** and never
+   drops keyboard focus into nothing: if a bar had focus, focus moves to
+   the bar at the same index (or the last bar), else to the Today block.
+6. **An Assign error clears when the menu closes.**
+7. **HiDPI:** the harness takes `SHOTS_SCALE` (1 default, 2 for a
+   scale-2 monitor) and the popover is checked at scale 2.
