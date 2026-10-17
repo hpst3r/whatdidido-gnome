@@ -169,6 +169,13 @@ class Fakes {
             this.load(JSON.parse(dec.decode(bytes)));
             return this._reply(msg, 200, {ok: true});
         }
+        // Replaces the day fixture only (a step that changes the day while
+        // the menu stays open); the status and the recorded requests stay.
+        if (method === 'POST' && path === '/app') {
+            const bytes = msg.get_request_body().flatten().get_data();
+            this.scenario = {...this.scenario, app: JSON.parse(dec.decode(bytes))};
+            return this._reply(msg, 200, {ok: true});
+        }
         if (method === 'GET' && path === '/state') {
             const quietMs = this.lastRequestUs ? Math.round((GLib.get_monotonic_time() - this.lastRequestUs) / 1000) : null;
             return this._reply(msg, 200, {

@@ -1,0 +1,152 @@
+{
+  "extends": "recording-full",
+  "description": "Amendment 2.5: the last Today bar (5:30 PM, #38) has keyboard focus, then the day changes to one that ends at 5:00 PM (36 bars): focus moves to the new last bar (#35), whose label shows.",
+  "tags": [
+    "needs-popover",
+    "keyboard"
+  ],
+  "steps": [
+    {
+      "focus": "wdi-pop-bar-38"
+    },
+    {
+      "expect_focus": "wdi-pop-bar-38"
+    },
+    {
+      "app": {
+        "now": "17:00",
+        "windows": {
+          "sd": {
+            "app_id": "org.example.ServiceDesk.desktop",
+            "app_name": "Service Desk",
+            "title": "#4101 — Printer VLAN / DHCP scope — Contoso"
+          },
+          "web": {
+            "app_id": "org.example.Browser.desktop",
+            "app_name": "Browser",
+            "title": "Fabrikam wiki — Backup rotation"
+          },
+          "term": {
+            "app_id": "org.example.Terminal.desktop",
+            "app_name": "Terminal",
+            "title": "ssh fs01.northwind.example"
+          },
+          "rdp": {
+            "app_id": "org.example.Remote.desktop",
+            "app_name": "Remote Desktop",
+            "title": "DC02 — Tailspin Toys"
+          }
+        },
+        "segments": [
+          [
+            "08:00",
+            "09:30",
+            "active",
+            "sd"
+          ],
+          [
+            "09:30",
+            "09:45",
+            "idle",
+            null
+          ],
+          [
+            "09:45",
+            "11:30",
+            "active",
+            "web"
+          ],
+          [
+            "11:30",
+            "12:15",
+            "paused",
+            null
+          ],
+          [
+            "12:15",
+            "14:00",
+            "active",
+            "term"
+          ],
+          [
+            "14:00",
+            "14:20",
+            "idle",
+            null
+          ],
+          [
+            "14:20",
+            "17:00",
+            "active",
+            "rdp"
+          ]
+        ],
+        "entries": [
+          {
+            "start": "08:00",
+            "end": "09:30",
+            "ticket": "#4101",
+            "client": "Contoso",
+            "category": "Network",
+            "billable": true
+          },
+          {
+            "start": "09:45",
+            "end": "11:30",
+            "ticket": "#4102",
+            "client": "Fabrikam",
+            "category": "Backup",
+            "billable": true
+          },
+          {
+            "start": "12:15",
+            "end": "14:00",
+            "ticket": "#4107",
+            "client": "Northwind",
+            "category": "Server",
+            "billable": false
+          },
+          {
+            "start": "14:20",
+            "end": "17:00",
+            "ticket": "#4110",
+            "client": "Tailspin Toys",
+            "category": "Identity",
+            "billable": true
+          }
+        ],
+        "tickets": [
+          "#4101",
+          "#4102",
+          "#4107"
+        ],
+        "ticket_defaults": [
+          {
+            "ticket": "#4101",
+            "client": "Contoso",
+            "category": "Network",
+            "billable": true
+          },
+          {
+            "ticket": "#4102",
+            "client": "Fabrikam",
+            "category": "Backup",
+            "billable": true
+          },
+          {
+            "ticket": "#4107",
+            "client": "Northwind",
+            "category": "Server",
+            "billable": false
+          }
+        ]
+      }
+    },
+    {
+      "wait_ms": 300
+    },
+    {
+      "expect_focus": "wdi-pop-bar-35"
+    }
+  ]
+}

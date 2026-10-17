@@ -1,0 +1,37 @@
+{
+  "extends": "recording-full",
+  "description": "Keyboard: Down (focus enters at Settings), then six Tabs reach the interval slider; its focus ring shows (Amendment 2.4).",
+  "tags": [
+    "needs-popover",
+    "keyboard"
+  ],
+  "steps": [
+    {
+      "key": "Down"
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "wait_ms": 300
+    },
+    {
+      "expect_focus": "wdi-pop-interval"
+    }
+  ]
+}

@@ -128,6 +128,13 @@ async function main() {
         const st2 = (await request('GET', `${admin}/state`)).json;
         check(st2.assignments.length === 1 && st2.assignments[0].ticket === '#4101', 'admin records the assignment');
 
+        const shorter = {...full.app, now: '17:00', segments: full.app.segments.slice(0, -1)};
+        const swapped = await request('POST', `${admin}/app`, {body: shorter});
+        const d3 = (await request('GET', `${app}/api/v1/timesheet/day?date=2031-03-09`)).json;
+        const st3 = (await request('GET', `${admin}/state`)).json;
+        check(swapped.status === 200 && local(d3.now) === '2031-03-09 17:00' && st3.status.interval_seconds === 60 &&
+            st3.assignments.length === 1, 'admin /app swaps only the day fixture');
+
         await request('POST', `${admin}/scenario`, {body: {...full, app: {timesheet: false}}});
         check((await request('GET', `${app}/api/v1/timesheet/day?date=2031-03-09`)).status === 404, 'no timesheet -> 404');
 

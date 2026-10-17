@@ -2,8 +2,8 @@
 // Every block state of POPOVER.md section 4.
 import {MicController} from '../whatdidido@wporter.org/lib/mic_model.js';
 import {
-    APP_URL_NOTICE, FAINT_COLORS, INTERVAL_STEPS, WARN_COLORS,
-    assignErrorText, assignmentBody, intervalLabel, nearestStep, popoverView,
+    APP_URL_NOTICE, FAINT_COLORS, INTERVAL_HOLD_MS, INTERVAL_STEPS, WARN_COLORS,
+    assignErrorText, assignmentBody, heldIndex, intervalLabel, nearestStep, popoverView,
 } from '../whatdidido@wporter.org/lib/popover_model.js';
 import {ticketColor} from '../whatdidido@wporter.org/lib/day_model.js';
 import {windowSwitchView} from '../whatdidido@wporter.org/lib/window_model.js';
@@ -218,6 +218,24 @@ for (const s of ['paused', 'starting', 'recovering'])
 for (const s of ['stopped', 'failed', 'stopping'])
     eq(`interval insensitive while ${s}`, view(st({state: s})).interval.sensitive, false);
 eq('interval insensitive while committing', view(st(), {extra: {ui: {intervalBusy: true}}}).interval.sensitive, false);
+// Amendment 2.3: after a commit the committed stop stays until a status
+// reports it or INTERVAL_HOLD_MS pass.
+const NOW = Date.parse('2026-10-15T15:10:00Z');
+const hold = {index: 1, seconds: 10, until: NOW + INTERVAL_HOLD_MS};
+eq('hold: kept while the status still has the old value', heldIndex(hold, 5, NOW), 1);
+eq('hold: kept until the deadline', heldIndex(hold, 5, NOW + INTERVAL_HOLD_MS - 1), 1);
+eq('hold: over at the deadline', heldIndex(hold, 5, NOW + INTERVAL_HOLD_MS), null);
+eq('hold: over once a status reports it', heldIndex(hold, 10, NOW), null);
+eq('hold: none', [heldIndex(null, 5, NOW), heldIndex({index: 14, seconds: 1, until: NOW + 1}, 5, NOW)], [null, null]);
+const ivh = i => [i.value, i.index, i.fraction, i.seconds, i.sessionSeconds, i.dragging, i.holding];
+eq('interval holds the committed stop', ivh(view(st({interval_seconds: 5}), {extra: {nowMs: NOW, ui: {hold}}}).interval),
+    ['10 s', 1, 1 / 13, 10, 5, false, true]);
+eq('interval hold ends when the status reports it', ivh(view(st({interval_seconds: 10}), {extra: {nowMs: NOW, ui: {hold}}}).interval),
+    ['10 s', 1, 1 / 13, 10, 10, false, false]);
+eq('interval hold ends after 3 s (snaps back)', ivh(view(st({interval_seconds: 5}), {extra: {nowMs: NOW + 3000, ui: {hold}}}).interval),
+    ['5 s', 0, 0, 5, 5, false, false]);
+eq('interval drag wins over a hold', ivh(view(st({interval_seconds: 5}), {extra: {nowMs: NOW, ui: {hold, dragIndex: 6}}}).interval),
+    ['1 min', 6, 6 / 13, 60, 5, true, false]);
 eq('interval hidden when not running', [view(null, {running: false}).interval.visible, view(null, {running: false}).interval.sensitive], [false, false]);
 
 // --- Now card ---------------------------------------------------------------------------

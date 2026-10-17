@@ -1,0 +1,49 @@
+{
+  "extends": "recording-full",
+  "description": "Keyboard: Down (focus enters at Settings), six Tabs to the interval slider, Right once (5 s -> 10 s), then a wait past the 600 ms keyboard commit: 10 s is saved and shown.",
+  "tags": [
+    "needs-popover",
+    "keyboard"
+  ],
+  "steps": [
+    {
+      "key": "Down"
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65363
+    },
+    {
+      "wait_ms": 1200
+    }
+  ],
+  "expect_requests": [
+    {
+      "method": "POST",
+      "path": "/control/v1/interval"
+    }
+  ],
+  "expect_labels": [
+    "10 s"
+  ],
+  "expect_status": {
+    "interval_seconds": 10
+  }
+}

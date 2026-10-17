@@ -135,6 +135,8 @@ export class AppClient {
         const msg = Soup.Message.new(method, base + path);
         if (!msg)
             throw new AppError('invalid app server URL', {code: 'invalid'});
+        // A 3xx is an ordinary failure: nothing leaves 127.0.0.1 (Amendment 2.1).
+        msg.set_flags(Soup.MessageFlags.NO_REDIRECT);
         if (body !== null) {
             const data = new TextEncoder().encode(JSON.stringify(body));
             msg.set_request_body_from_bytes('application/json', new GLib.Bytes(data));

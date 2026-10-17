@@ -208,16 +208,20 @@ class Indicator extends PanelMenu.Button {
     }
 
     // Run a control request, then refresh. Failures are shown in the menu.
+    // Resolves to true when fn succeeded.
     async _act(fn) {
+        let ok = false;
         try {
             await fn(this._actionCancellable);
             this._notice = null;
+            ok = true;
         } catch (e) {
             if (isCancelled(e) || this._destroyed)
-                return;
+                return false;
             this._notice = errorText(e);
         }
         this._refresh();
+        return ok;
     }
 
     _command(action) {
@@ -434,8 +438,8 @@ class Indicator extends PanelMenu.Button {
     }
 
     // The popover's actions (lib/popover_model.js header). Promises go back
-    // to the popover for 'interval' (it holds the dragged stop until then)
-    // and 'assign' (true: saved, so it forgets the picked ticket).
+    // to the popover for 'interval' (it holds the dragged stop until then;
+    // true: saved) and 'assign' (true: saved, so it forgets the picked ticket).
     _onAction(a) {
         switch (a.action) {
         case 'settings':
@@ -540,7 +544,10 @@ class Indicator extends PanelMenu.Button {
         } catch (e) {
             if (isCancelled(e) || this._destroyed)
                 return false;
-            this._assignError = assignErrorText(e);
+            // Closing the menu clears the error (Amendment 2.6); one that
+            // arrives after it closed is only logged.
+            if (this.menu.isOpen)
+                this._assignError = assignErrorText(e);
             console.warn(`whatdidido: assign failed: ${e.message}`);
         }
         this._assignBusy = false;
