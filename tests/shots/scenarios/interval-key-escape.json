@@ -1,0 +1,49 @@
+{
+  "extends": "recording-full",
+  "description": "Amendment 2.2: the keys of interval-key-control (the slider shows 10 s), then Escape closes the menu before the 600 ms keyboard commit: the shown stop is still saved (10 s).",
+  "tags": [
+    "needs-popover",
+    "keyboard"
+  ],
+  "steps": [
+    {
+      "key": "Down"
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65289
+    },
+    {
+      "key": 65363
+    },
+    {
+      "key": "Escape"
+    },
+    {
+      "wait_ms": 1200
+    }
+  ],
+  "expect_requests": [
+    {
+      "method": "POST",
+      "path": "/control/v1/interval"
+    }
+  ],
+  "expect_status": {
+    "interval_seconds": 10
+  }
+}

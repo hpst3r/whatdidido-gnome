@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Hovering Today bar 10: the right-hand label shows its start and ticket.",
+  "tags": ["needs-popover", "hover"],
+  "steps": [{"hover": "wdi-pop-bar-10"}]
+}

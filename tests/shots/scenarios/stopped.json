@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Stopped; the microphone is selected for the next Start.",
+  "tags": ["state"],
+  "control": {"status": {"state": "stopped", "pending": 0, "describe_withheld": null, "audio_capturing": false, "audio_state": "pending", "mic": {"state": "pending"}}}
+}

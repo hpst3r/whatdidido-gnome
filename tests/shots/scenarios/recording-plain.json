@@ -1,0 +1,21 @@
+{
+  "description": "Recording on 1 monitor every 30 s on a server without audio capture, PHI guard or window activity; no timesheet.",
+  "tags": ["state"],
+  "control": {
+    "status": {
+      "state": "recording",
+      "monitors": 1,
+      "samples": 412,
+      "pending": 0,
+      "interval_seconds": 30,
+      "last_error": null,
+      "reason": null,
+      "waiting_for_unlock": false,
+      "mic": {"available": false, "on": false, "source_id": null}
+    }
+  },
+  "microphones": [],
+  "settings": {"pause-reminder-minutes": 0, "mic-reminder-minutes": 0},
+  "app": {"timesheet": false},
+  "steps": []
+}

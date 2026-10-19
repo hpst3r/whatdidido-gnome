@@ -1,11 +1,300 @@
 /* Colour is an extra cue only: each state also has its own icon shape and
-   the menu header names the state in words. */
+   the popover names the state in words. */
 .wdi-panel-box { spacing: 2px; }
 .wdi-state-icon.wdi-recording { color: #ff7b63; }
 .wdi-state-icon.wdi-recovering { color: #f6d32d; }
 .wdi-state-icon.wdi-failed { color: #f6d32d; }
 .wdi-state-icon.wdi-offline { color: #9a9996; }
 
-.wdi-header-title { font-weight: bold; }
-.wdi-header-detail { color: #c0bfbc; font-size: 0.9em; font-feature-settings: "tnum"; }
-.wdi-error { color: #f6d32d; font-size: 0.9em; }
+/* The popover (docs/POPOVER.md section 2): the app's GNOME skin inside the
+   shell's own popup. Tints are the foreground at ~10 %; the accent is the
+   shell's. Red and amber: #ff7b63/#f6d32d on dark, #c01c28/#7f5900 on light
+   (>= 4.5:1 on the light popup and on a tinted block). */
+/* St's width is the content box: 332 + 2 x 4 padding = 340. */
+.wdi-pop {
+  width: 332px;
+  padding: 2px 4px 0;
+  spacing: 8px;
+  font-size: 13px;
+}
+
+.wdi-pop-button { border-radius: 99px; }
+
+/* header */
+.wdi-pop-header { spacing: 8px; padding: 0 2px 2px 4px; }
+.wdi-pop-logo { icon-size: 18px; }
+.wdi-pop-title { font-weight: 600; }
+.wdi-pop-round {
+  width: 30px;
+  height: 30px;
+  border-radius: 99px;
+}
+
+/* blocks */
+.wdi-pop-card { border-radius: 12px; }
+.wdi-pop-block { padding: 12px 14px; spacing: 6px; }
+.wdi-pop-block-head { spacing: 8px; }
+.wdi-pop-block-title { font-size: 12.5px; font-weight: 500; }
+.wdi-pop-block-value { font-size: 12.5px; font-feature-settings: "tnum"; }
+
+/* status card */
+.wdi-pop-status { padding: 14px; spacing: 12px; }
+.wdi-pop-status-calm { padding: 14px; spacing: 12px; }
+.wdi-pop-status-text { spacing: 1px; }
+.wdi-pop-status-title { font-size: 20px; font-weight: 600; }
+.wdi-pop-status-calm .wdi-pop-status-title { font-size: 13px; font-weight: 600; }
+.wdi-pop-status-sub { font-size: 12px; }
+.wdi-pop-status-calm .wdi-pop-status-sub { padding-top: 3px; }
+.wdi-pop-status-icon { icon-size: 22px; }
+.wdi-pop-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 6px;
+}
+.wdi-pop-dot-paused { border-radius: 3px; }
+.wdi-pop-primary {
+  width: 46px;
+  height: 46px;
+  border-radius: 99px;
+}
+
+/* notices */
+.wdi-pop-notices { spacing: 8px; }
+.wdi-pop-notice {
+  padding: 7px 12px;
+  border-radius: 12px;
+  font-size: 12.5px;
+}
+
+/* tiles */
+.wdi-pop-tiles { spacing: 8px; }
+.wdi-pop-tile-row { spacing: 8px; }
+/* (332 - 8) / 2 = 162 = 142 + 20 padding */
+.wdi-pop-tile {
+  width: 142px;
+  padding: 8px 12px 8px 8px;
+  border-radius: 99px;
+}
+.wdi-pop-tile-box { spacing: 10px; }
+.wdi-pop-tile-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 99px;
+}
+.wdi-pop-tile-title { font-size: 13px; font-weight: 600; }
+.wdi-pop-tile-sub { font-size: 11.5px; }
+
+/* input picker and inline lists */
+.wdi-pop-picker { padding: 0; }
+.wdi-pop-picker-button { border-radius: 12px; padding: 6px 6px 6px 14px; }
+.wdi-pop-picker-row { spacing: 10px; }
+.wdi-pop-picker-title { font-size: 12.5px; font-weight: 500; }
+.wdi-pop-select {
+  max-width: 200px;
+  height: 26px;
+  padding: 0 6px 0 9px;
+  spacing: 4px;
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+.wdi-pop-select-label { font-size: 12.5px; }
+.wdi-pop-select-arrow { icon-size: 16px; }
+.wdi-pop-list { padding: 2px 6px 6px; spacing: 2px; }
+.wdi-pop-ticket-list { padding: 4px 0 0; }
+.wdi-pop-list-item { border-radius: 8px; padding: 6px 8px; }
+.wdi-pop-list-row { spacing: 8px; }
+.wdi-pop-list-label { font-size: 12.5px; }
+.wdi-pop-check { icon-size: 16px; }
+.wdi-pop-list-empty { padding: 6px 8px; font-size: 12.5px; }
+
+/* interval slider */
+.wdi-pop-slider { height: 22px; }
+/* The focus ring, like the shell's quick-settings slider; the padding keeps
+   the handle inside it at either end. */
+.wdi-pop-slider-bin {
+  padding: 0 4px;
+  border-radius: 11px;
+}
+.wdi-pop-slider-bin:focus {
+  box-shadow: inset 0 0 0 2px st-transparentize(-st-accent-color, 0.2);
+  background-color: st-transparentize(-st-accent-color, 0.9);
+}
+
+/* Now card */
+.wdi-pop-overline {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+}
+.wdi-pop-now-app { border-radius: 8px; }
+.wdi-pop-now-row { spacing: 10px; }
+.wdi-pop-app-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+.wdi-pop-app-initials-bin {
+  background-color: -st-accent-color;
+  color: -st-accent-fg-color;
+}
+.wdi-pop-app-initials { font-size: 10.5px; font-weight: 700; }
+.wdi-pop-app-name { font-size: 13px; font-weight: 600; }
+.wdi-pop-app-title { font-size: 12px; }
+.wdi-pop-rule { height: 1px; margin: 4px 0 2px; }
+.wdi-pop-stretch { spacing: 5px; }
+.wdi-pop-stretch-text { font-size: 11px; }
+.wdi-pop-stretch-row { spacing: 8px; }
+.wdi-pop-ticket { border-radius: 6px; }
+.wdi-pop-ticket-box {
+  height: 28px;
+  padding: 0 6px 0 10px;
+  spacing: 4px;
+}
+.wdi-pop-assign {
+  padding: 0 18px;
+  height: 32px;
+  border-radius: 99px;
+  font-weight: 600;
+  background-color: -st-accent-color;
+  color: -st-accent-fg-color;
+}
+.wdi-pop-assign:hover { background-color: st-lighten(-st-accent-color, 6%); }
+.wdi-pop-assign:insensitive {
+  background-color: st-transparentize(-st-accent-color, 0.5);
+  color: st-transparentize(-st-accent-fg-color, 0.3);
+}
+.wdi-pop-last { spacing: 6px; font-size: 12.5px; }
+.wdi-pop-last-dot { width: 8px; height: 8px; border-radius: 3px; }
+.wdi-pop-now-error { font-size: 12px; }
+
+/* Today bars */
+.wdi-pop-today { padding: 10px 14px 8px; spacing: 6px; }
+.wdi-pop-bars { height: 38px; spacing: 1px; }
+.wdi-pop-bar { border-radius: 1.5px; min-width: 1px; }
+.wdi-pop-bar-accent { background-color: -st-accent-color; }
+.wdi-pop-bar:focus { border: 1px solid; }
+
+/* Open whatdidido */
+.wdi-pop-open {
+  height: 38px;
+  margin-top: 2px;
+  border-radius: 99px;
+  font-weight: 600;
+  background-color: -st-accent-color;
+  color: -st-accent-fg-color;
+}
+.wdi-pop-open:hover { background-color: st-lighten(-st-accent-color, 6%); }
+.wdi-pop-open:insensitive {
+  background-color: st-transparentize(-st-accent-color, 0.5);
+  color: st-transparentize(-st-accent-fg-color, 0.3);
+}
+
+/* footer */
+.wdi-pop-footer {
+  padding: 8px 4px 2px;
+  spacing: 10px;
+  border-top-width: 1px;
+  font-size: 11.5px;
+}
+.wdi-pop-footer-text { font-feature-settings: "tnum"; }
+.wdi-pop-link { font-size: 12px; font-weight: 500; padding: 2px 4px; border-radius: 6px; }
+
+/* keyboard focus, like the shell's own controls */
+.wdi-pop-button:focus { box-shadow: inset 0 0 0 2px st-transparentize(-st-accent-color, 0.2); }
+.wdi-pop-tile.wdi-pop-on:focus,
+.wdi-pop-open:focus,
+.wdi-pop-assign:focus { box-shadow: inset 0 0 0 2px st-transparentize(-st-accent-fg-color, 0.3); }
+
+/* ---- dark ---- */
+.wdi-dark { color: #ffffff; }
+.wdi-dark .wdi-pop-muted,
+.wdi-dark .wdi-pop-status-sub,
+.wdi-dark .wdi-pop-tile-sub,
+.wdi-dark .wdi-pop-footer { color: #a8a8ad; }
+.wdi-dark .wdi-pop-faint,
+.wdi-dark .wdi-pop-overline { color: #8f8f94; }
+.wdi-dark .wdi-pop-card,
+.wdi-dark .wdi-pop-tile { background-color: rgba(255, 255, 255, 0.07); }
+.wdi-dark .wdi-pop-tile:hover,
+.wdi-dark .wdi-pop-picker-button:hover,
+.wdi-dark .wdi-pop-now-app:hover,
+.wdi-dark .wdi-pop-list-item:hover { background-color: rgba(255, 255, 255, 0.06); }
+.wdi-dark .wdi-pop-tile:hover { background-color: rgba(255, 255, 255, 0.12); }
+.wdi-dark .wdi-pop-round:hover { background-color: rgba(255, 255, 255, 0.1); }
+.wdi-dark .wdi-pop-round:active { background-color: rgba(255, 255, 255, 0.16); }
+.wdi-dark .wdi-pop-tile-icon { background-color: rgba(255, 255, 255, 0.1); }
+.wdi-dark .wdi-pop-phi .wdi-pop-tile-icon { background-color: rgba(246, 211, 45, 0.18); color: #f6d32d; }
+.wdi-dark .wdi-pop-phi .wdi-pop-tile-sub { color: #f6d32d; }
+.wdi-dark .wdi-pop-status-paused { background-color: rgba(246, 211, 45, 0.12); }
+.wdi-dark .wdi-pop-dot { background-color: #77767b; }
+.wdi-dark .wdi-pop-dot-recording { background-color: #ff7b63; }
+.wdi-dark .wdi-pop-dot-paused { background-color: #f6d32d; }
+.wdi-dark .wdi-pop-status-icon { color: #a8a8ad; }
+.wdi-dark .wdi-pop-primary { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+.wdi-dark .wdi-pop-primary:hover { background-color: rgba(255, 255, 255, 0.17); }
+.wdi-dark .wdi-pop-primary:insensitive { color: rgba(255, 255, 255, 0.45); }
+.wdi-dark .wdi-pop-notice { background-color: rgba(246, 211, 45, 0.15); }
+.wdi-dark .wdi-pop-select { background-color: rgba(0, 0, 0, 0.25); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09); }
+.wdi-dark .wdi-pop-ticket { background-color: rgba(255, 255, 255, 0.08); }
+.wdi-dark .wdi-pop-ticket:hover { background-color: rgba(255, 255, 255, 0.12); }
+.wdi-dark .wdi-pop-ticket:insensitive { color: rgba(255, 255, 255, 0.45); }
+.wdi-dark .wdi-pop-rule { background-color: rgba(255, 255, 255, 0.09); }
+.wdi-dark .wdi-pop-footer { border-color: rgba(255, 255, 255, 0.09); }
+.wdi-dark .wdi-pop-link { color: #a8a8ad; }
+.wdi-dark .wdi-pop-link:hover { background-color: rgba(255, 255, 255, 0.08); }
+.wdi-dark .wdi-pop-stop { color: #ff7b63; }
+.wdi-dark .wdi-pop-now-error { color: #ff7b63; }
+.wdi-dark .wdi-pop-bar:focus { border-color: #ffffff; }
+.wdi-dark .wdi-pop-tile:insensitive .wdi-pop-tile-title { color: rgba(255, 255, 255, 0.55); }
+
+/* ---- light ---- */
+.wdi-light { color: #222226; }
+.wdi-light .wdi-pop-muted,
+.wdi-light .wdi-pop-status-sub,
+.wdi-light .wdi-pop-tile-sub,
+.wdi-light .wdi-pop-footer { color: #5e5e64; }
+.wdi-light .wdi-pop-faint,
+.wdi-light .wdi-pop-overline { color: #77777c; }
+.wdi-light .wdi-pop-card,
+.wdi-light .wdi-pop-tile { background-color: rgba(0, 0, 6, 0.055); }
+.wdi-light .wdi-pop-picker-button:hover,
+.wdi-light .wdi-pop-now-app:hover,
+.wdi-light .wdi-pop-list-item:hover { background-color: rgba(0, 0, 6, 0.05); }
+.wdi-light .wdi-pop-tile:hover { background-color: rgba(0, 0, 6, 0.09); }
+.wdi-light .wdi-pop-round:hover { background-color: rgba(0, 0, 6, 0.07); }
+.wdi-light .wdi-pop-round:active { background-color: rgba(0, 0, 6, 0.12); }
+.wdi-light .wdi-pop-tile-icon { background-color: rgba(0, 0, 6, 0.07); }
+.wdi-light .wdi-pop-phi .wdi-pop-tile-icon { background-color: rgba(229, 165, 10, 0.2); color: #7f5900; }
+.wdi-light .wdi-pop-phi .wdi-pop-tile-sub { color: #7f5900; }
+.wdi-light .wdi-pop-status-paused { background-color: rgba(229, 165, 10, 0.14); }
+.wdi-light .wdi-pop-dot { background-color: #9a9a9f; }
+.wdi-light .wdi-pop-dot-recording { background-color: #e01b24; }
+.wdi-light .wdi-pop-dot-paused { background-color: #c88800; }
+.wdi-light .wdi-pop-status-icon { color: #5e5e64; }
+.wdi-light .wdi-pop-primary { background-color: rgba(0, 0, 6, 0.09); color: #222226; }
+.wdi-light .wdi-pop-primary:hover { background-color: rgba(0, 0, 6, 0.13); }
+.wdi-light .wdi-pop-primary:insensitive { color: rgba(34, 34, 38, 0.45); }
+.wdi-light .wdi-pop-notice { background-color: rgba(229, 165, 10, 0.18); }
+.wdi-light .wdi-pop-select { background-color: #ffffff; box-shadow: inset 0 0 0 1px rgba(0, 0, 6, 0.1); }
+.wdi-light .wdi-pop-ticket { background-color: rgba(0, 0, 6, 0.07); }
+.wdi-light .wdi-pop-ticket:hover { background-color: rgba(0, 0, 6, 0.1); }
+.wdi-light .wdi-pop-ticket:insensitive { color: rgba(34, 34, 38, 0.45); }
+.wdi-light .wdi-pop-rule { background-color: rgba(0, 0, 6, 0.1); }
+.wdi-light .wdi-pop-footer { border-color: rgba(0, 0, 6, 0.1); }
+.wdi-light .wdi-pop-link { color: #5e5e64; }
+.wdi-light .wdi-pop-link:hover { background-color: rgba(0, 0, 6, 0.06); }
+.wdi-light .wdi-pop-stop { color: #c01c28; }
+.wdi-light .wdi-pop-now-error { color: #c01c28; }
+.wdi-light .wdi-pop-bar:focus { border-color: #222226; }
+.wdi-light .wdi-pop-tile:insensitive .wdi-pop-tile-title { color: rgba(34, 34, 38, 0.55); }
+
+/* ---- accent (after the variants, so it wins over their tints) ---- */
+.wdi-pop .wdi-pop-primary.wdi-pop-accent,
+.wdi-pop .wdi-pop-tile.wdi-pop-on {
+  background-color: -st-accent-color;
+  color: -st-accent-fg-color;
+}
+.wdi-pop .wdi-pop-primary.wdi-pop-accent:hover,
+.wdi-pop .wdi-pop-tile.wdi-pop-on:hover { background-color: st-lighten(-st-accent-color, 6%); }
+.wdi-pop .wdi-pop-tile.wdi-pop-on .wdi-pop-tile-sub { color: st-transparentize(-st-accent-fg-color, 0.18); }
+.wdi-pop .wdi-pop-tile.wdi-pop-on .wdi-pop-tile-icon { background-color: rgba(255, 255, 255, 0.22); }

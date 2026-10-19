@@ -1,4 +1,3 @@
-import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
@@ -8,18 +7,21 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+import {AppClient} from './lib/app_client.js';
 import {ControlClient} from './lib/client.js';
+import {localDate} from './lib/day_model.js';
 import {MicController} from './lib/mic_model.js';
 import {MicReminder, MIC_REMINDER_TITLE} from './lib/mic_reminder.js';
-import {buildView, errorText, pageUrl, pollPeriod} from './lib/model.js';
+import {buildView, errorText, pollPeriod} from './lib/model.js';
 import {PauseReminder, REMINDER_TITLE, timerDelay} from './lib/pause_reminder.js';
+import {Popover} from './lib/popover.js';
+import {assignErrorText, popoverView} from './lib/popover_model.js';
 import {windowSwitchView} from './lib/window_model.js';
 import {WindowTracker} from './lib/window_tracker.js';
 
 const STATE_CLASSES = ['wdi-stopped', 'wdi-busy', 'wdi-recording', 'wdi-paused', 'wdi-recovering', 'wdi-failed', 'wdi-offline'];
-const ACTIONS = [['start', 'Start'], ['pause', 'Pause'], ['resume', 'Resume'], ['stop', 'Stop']];
+const DAY_REFRESH_S = 15;   // the day is fetched again this often while the menu is open
 
 function isCancelled(e) {
     return e?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
@@ -45,8 +47,6 @@ class Indicator extends PanelMenu.Button {
         this._notice = null;        // last failed action, shown in the menu
         this._noticeSeen = false;
         this._lastLogged = null;
-        this._intervalKey = '';
-        this._syncing = false;
         this._destroyed = false;
         this._reminder = new PauseReminder({minutes: this._settings.get_uint('pause-reminder-minutes')});
         this._reminderTimer = 0;
@@ -58,8 +58,16 @@ class Indicator extends PanelMenu.Button {
         this._micReminderSource = null;
         this._micReminderNotification = null;
         this._chooseMicIdleId = 0;  // the mic reminder's "Choose microphone"
-        this._reopenMenuId = 0;     // 'menu-closed' handler showing the source list again
-        this._reopenIdleId = 0;
+        this._commandBusy = false;  // a start/pause/resume/stop in flight
+        this._intervalBusy = false;
+        this._app = new AppClient({control: this._client, settings: {get: key => this._settings.get_string(key)}});
+        this._appBase = null;       // the app server's origin, or null
+        this._day = null;           // the last TimesheetDay, or null
+        this._dayCancellable = null;
+        this._dayTimer = 0;
+        this._dayLogged = null;
+        this._assignBusy = false;
+        this._assignError = null;
         this._mic = new MicController({
             settings: {
                 get: key => this._settings.get_string(key),
@@ -67,11 +75,8 @@ class Indicator extends PanelMenu.Button {
             },
             setMicOn: (on, preferred, c) => this._client.setMicOn(on, preferred, c),
             readStatus: c => this._client.status(c),
-            openSources: () => this._openMicSources(),
-            changed: () => {
-                this._render();
-                this._renderMics();
-            },
+            openSources: () => this._popover.expand('input'),
+            changed: () => this._render(),
         });
 
         const box = new St.BoxLayout({style_class: 'panel-status-indicators-box wdi-panel-box'});
@@ -88,7 +93,17 @@ class Indicator extends PanelMenu.Button {
         box.add_child(this._micIcon);
         this.add_child(box);
 
-        this._buildMenu();
+        this._popover = new Popover({
+            path: ext.path,
+            onAction: action => this._onAction(action),
+            onLink: link => this._openLink(link),
+            changed: () => this._render(),
+        });
+        this.menu.box.add_child(this._popover.actor);
+        // Light or dark like the shell's own style (POPOVER.md Amendment 1.4).
+        St.Settings.get().connectObject('notify::color-scheme', () => this._render(), this);
+        this._interface = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
+        this._interface.connectObject('changed::clock-format', () => this._render(), this);
 
         this._windowTracker = new WindowTracker({
             settings: this._settings,
@@ -102,10 +117,14 @@ class Indicator extends PanelMenu.Button {
             this._settings.connect('changed::poll-idle', () => this._schedule()),
             this._settings.connect('changed::show-mic-indicator', () => this._render()),
             ...['microphone-stable-id', 'microphone-id', 'microphone-label'].map(key =>
-                this._settings.connect(`changed::${key}`, () => {
-                    this._render();
-                    this._renderMics();
-                })),
+                this._settings.connect(`changed::${key}`, () => this._render())),
+            this._settings.connect('changed::app-url', () => {
+                this._appBase = null;
+                this._day = null;
+                this._render();
+                if (this.menu.isOpen)
+                    this._loadDay();
+            }),
             this._settings.connect('changed::report-active-window', () => this._render()),
             this._settings.connect('changed::pause-reminder-minutes', () => this._applyReminder(
                 this._reminder.setMinutes(this._settings.get_uint('pause-reminder-minutes'), monotonicMs()))),
@@ -113,80 +132,25 @@ class Indicator extends PanelMenu.Button {
                 this._micReminder.setMinutes(this._settings.get_uint('mic-reminder-minutes'), monotonicMs()))),
         ];
         this.menu.connect('open-state-changed', (_m, open) => {
+            this._popover.setOpen(open);
             if (open) {
-                // Reopened during the close animation of the switch's own
-                // close: 'menu-closed' never comes, so show the list now.
-                if (this._reopenMenuId) {
-                    this._cancelReopen();
-                    this._micSourceMenu.setSubmenuShown(true);
-                }
                 this._refresh();
                 this._loadMics();
+                this._loadDay();
             } else {
-                // Not when the switch's own close is about to show the source list.
-                if (!this._reopenMenuId)
-                    this._mic.menuClosed();
+                this._mic.menuClosed();
                 if (this._noticeSeen)
                     this._notice = null;
                 this._noticeSeen = false;
+                this._assignError = null;
+                this._stopDay();
                 this._schedule();
+                this._render();
             }
         });
 
         this._render();
-        this._renderMics();
         this._refresh();
-    }
-
-    _buildMenu() {
-        this._header = new PopupMenu.PopupBaseMenuItem({reactive: false});
-        const col = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true});
-        this._title = new St.Label({style_class: 'wdi-header-title'});
-        this._detail = new St.Label({style_class: 'wdi-header-detail'});
-        col.add_child(this._title);
-        col.add_child(this._detail);
-        this._header.add_child(col);
-        this.menu.addMenuItem(this._header);
-
-        this._errorItem = new PopupMenu.PopupMenuItem('', {reactive: false});
-        this._errorItem.label.add_style_class_name('wdi-error');
-        this.menu.addMenuItem(this._errorItem);
-        this._noticeItem = new PopupMenu.PopupMenuItem('', {reactive: false});
-        this._noticeItem.label.add_style_class_name('wdi-error');
-        this.menu.addMenuItem(this._noticeItem);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._actionItems = {};
-        for (const [action, label] of ACTIONS)
-            this._actionItems[action] = this.menu.addAction(label, () => this._command(action));
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._micItem = new PopupMenu.PopupSwitchMenuItem('Microphone', false);
-        // setToggleState() also emits 'toggled' in Shell 50: ignore our own syncs.
-        this._micItem.connect('toggled', (_item, on) => {
-            if (!this._syncing)
-                this._setMic(on);
-        });
-        this.menu.addMenuItem(this._micItem);
-        // Why the mic is off: "Choose a microphone", "<label> is not connected".
-        this._micHintItem = new PopupMenu.PopupMenuItem('', {reactive: false});
-        this._micHintItem.label.add_style_class_name('wdi-error');
-        this.menu.addMenuItem(this._micHintItem);
-        this._micSourceMenu = new PopupMenu.PopupSubMenuMenuItem('Microphone source');
-        this.menu.addMenuItem(this._micSourceMenu);
-        this._intervalMenu = new PopupMenu.PopupSubMenuMenuItem('Screenshot interval');
-        this.menu.addMenuItem(this._intervalMenu);
-        this._windowItem = new PopupMenu.PopupSwitchMenuItem('Record active window', false);
-        this._windowItem.connect('toggled', (_item, on) => {
-            if (!this._syncing)
-                this._settings.set_boolean('report-active-window', on);
-        });
-        this.menu.addMenuItem(this._windowItem);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._sessionItem = this.menu.addAction('Open session page', () => this._open('/session'));
-        this._dayItem = this.menu.addAction('Open day view', () => this._open('/day'));
-        this.menu.addAction('Settings', () => this._ext.openPreferences());
     }
 
     _schedule() {
@@ -244,20 +208,29 @@ class Indicator extends PanelMenu.Button {
     }
 
     // Run a control request, then refresh. Failures are shown in the menu.
+    // Resolves to true when fn succeeded.
     async _act(fn) {
+        let ok = false;
         try {
             await fn(this._actionCancellable);
             this._notice = null;
+            ok = true;
         } catch (e) {
             if (isCancelled(e) || this._destroyed)
-                return;
+                return false;
             this._notice = errorText(e);
         }
         this._refresh();
+        return ok;
     }
 
     _command(action) {
-        this._act(c => this._client.command(action, c));
+        this._commandBusy = true;
+        this._render();
+        return this._act(c => this._client.command(action, c)).finally(() => {
+            this._commandBusy = false;
+            this._render();
+        });
     }
 
     // The reminder's Resume: the menu's path, plus a log line once per
@@ -425,9 +398,9 @@ class Indicator extends PanelMenu.Button {
         notification?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
     }
 
-    // "Choose microphone" only shows the menu, with the source list open if
-    // the session offers one; picking a source is the menu's own path. On
-    // idle, once the banner or the calendar has handled the click.
+    // "Choose microphone" only shows the menu, with the input list expanded
+    // if the session offers one; picking a source is the popover's own path.
+    // On idle, once the banner or the calendar has handled the click.
     _showMicSourcesFromReminder() {
         if (this._destroyed || this._chooseMicIdleId)
             return;
@@ -437,20 +410,25 @@ class Indicator extends PanelMenu.Button {
                 return GLib.SOURCE_REMOVE;
             if (!this.menu.isOpen)
                 this.menu.open();
-            if (this._micSourceMenu.visible)
-                this._micSourceMenu.setSubmenuShown(true);
+            this._popover.expand('input');
             return GLib.SOURCE_REMOVE;
         });
     }
 
-    // User actions only: the switch and the source submenu. Polling never
-    // sends a mic request.
+    // User actions only: the mic tile and the input list. Polling never
+    // sends a mic request. With no saved choice the controller expands the
+    // input list instead (openSources) and the menu stays open.
     _setMic(on) {
         this._act(c => this._mic.toggle(on, c)).finally(() => this._loadMics());
     }
 
     _setInterval(seconds) {
-        this._act(c => this._client.setInterval(seconds, c));
+        this._intervalBusy = true;
+        this._render();
+        return this._act(c => this._client.setInterval(seconds, c)).finally(() => {
+            this._intervalBusy = false;
+            this._render();
+        });
     }
 
     // Saves the choice; turns the mic on after "Choose a microphone", or
@@ -459,45 +437,123 @@ class Indicator extends PanelMenu.Button {
         this._act(c => this._mic.choose(item, c)).finally(() => this._loadMics());
     }
 
-    // Turning the switch on without a saved choice. Activating the switch
-    // item closes the menu (space on the keyboard does not), so show the menu
-    // again once it has closed, with the source list open.
-    _openMicSources() {
-        if (this._destroyed || this._reopenMenuId)
+    // The popover's actions (lib/popover_model.js header). Promises go back
+    // to the popover for 'interval' (it holds the dragged stop until then;
+    // true: saved) and 'assign' (true: saved, so it forgets the picked ticket).
+    _onAction(a) {
+        switch (a.action) {
+        case 'settings':
+            this.menu.close();
+            this._ext.openPreferences();
+            return null;
+        case 'command':
+            return this._command(a.command);
+        case 'mic':
+            this._setMic(a.on);
+            return null;
+        case 'choose-mic':
+            this._chooseMic(a.item);
+            return null;
+        case 'window':
+            this._settings.set_boolean('report-active-window', a.on);
+            return null;
+        case 'interval':
+            return this._setInterval(a.seconds);
+        case 'assign':
+            return this._assign(a.body);
+        default:
+            return null;
+        }
+    }
+
+    // App links open in the default browser and close the menu.
+    _openLink(link) {
+        const url = this._app.url(link.view, link.params);
+        if (!url)
             return;
-        this._reopenMenuId = this.menu.connect('menu-closed', () => {
-            this._cancelReopen();
-            if (!this._destroyed) {
-                this.menu.open();
-                this._micSourceMenu.setSubmenuShown(true);
-            }
-        });
-        this._reopenIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            this._reopenIdleId = 0;
-            if (this.menu.isOpen) {
-                this._cancelReopen();
-                this._micSourceMenu.setSubmenuShown(true);
-            }
+        this.menu.close();
+        try {
+            Gio.AppInfo.launch_default_for_uri(url, global.create_app_launch_context(0, -1));
+        } catch (e) {
+            this._notice = errorText(e);
+            this._render();
+        }
+    }
+
+    // GET /api/v1/timesheet/day for this machine's date (POPOVER.md 3.3, 3.4):
+    // on open, every DAY_REFRESH_S while open, after an Assign. A response
+    // after the menu closed or a newer request started is dropped.
+    async _loadDay() {
+        if (this._destroyed || !this.menu.isOpen)
+            return;
+        this._dayCancellable?.cancel();
+        const cancellable = new Gio.Cancellable();
+        this._dayCancellable = cancellable;
+        this._armDayTimer();
+        let base = null, day = null;
+        try {
+            base = await this._app.base(cancellable);
+            day = base ? await this._app.day(localDate(Date.now()), cancellable) : null;
+            this._dayLogged = null;
+        } catch (e) {
+            if (isCancelled(e) || this._destroyed)
+                return;
+            // Nothing listening: hidden, found again next time. Anything
+            // else: hidden and logged once per distinct message.
+            if (!e.unreachable && e.message !== this._dayLogged)
+                console.warn(`whatdidido: timesheet day failed: ${e.message}`);
+            this._dayLogged = e.unreachable ? null : e.message;
+        }
+        if (this._dayCancellable !== cancellable || !this.menu.isOpen)
+            return;
+        this._dayCancellable = null;
+        this._appBase = base;
+        this._day = day;
+        this._render();
+    }
+
+    _armDayTimer() {
+        if (this._dayTimer)
+            GLib.source_remove(this._dayTimer);
+        this._dayTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, DAY_REFRESH_S, () => {
+            this._dayTimer = 0;
+            this._loadDay();
             return GLib.SOURCE_REMOVE;
         });
     }
 
-    _cancelReopen() {
-        if (this._reopenMenuId)
-            this.menu.disconnect(this._reopenMenuId);
-        this._reopenMenuId = 0;
-        if (this._reopenIdleId)
-            GLib.source_remove(this._reopenIdleId);
-        this._reopenIdleId = 0;
+    _stopDay() {
+        this._dayCancellable?.cancel();
+        this._dayCancellable = null;
+        if (this._dayTimer)
+            GLib.source_remove(this._dayTimer);
+        this._dayTimer = 0;
     }
 
-    _open(path) {
-        this._client.baseUrl(null).then(base => {
-            Gio.AppInfo.launch_default_for_uri(pageUrl(base, path), global.create_app_launch_context(0, -1));
-        }).catch(e => {
-            this._notice = errorText(e);
-            this._render();
-        });
+    // POST /api/v1/timesheet/assignments, then the day again either way.
+    async _assign(body) {
+        if (this._assignBusy)
+            return false;
+        this._assignBusy = true;
+        this._assignError = null;
+        this._render();
+        let ok = false;
+        try {
+            await this._app.assign(body, this._actionCancellable);
+            ok = true;
+        } catch (e) {
+            if (isCancelled(e) || this._destroyed)
+                return false;
+            // Closing the menu clears the error (Amendment 2.6); one that
+            // arrives after it closed is only logged.
+            if (this.menu.isOpen)
+                this._assignError = assignErrorText(e);
+            console.warn(`whatdidido: assign failed: ${e.message}`);
+        }
+        this._assignBusy = false;
+        this._render();
+        this._loadDay();
+        return ok;
     }
 
     async _loadMics() {
@@ -536,81 +592,44 @@ class Indicator extends PanelMenu.Button {
         this._micIcon.visible = view.micIndicator;
         this.accessible_name = view.accessibleName;
 
-        this._title.text = view.header.title;
-        this._detail.text = view.header.detail;
-        this._detail.visible = !!view.header.detail;
-        this._errorItem.label.text = view.lastError ?? '';
-        this._errorItem.visible = !!view.lastError;
-        this._noticeItem.label.text = this._notice ?? '';
-        this._noticeItem.visible = !!this._notice;
         if (this._notice && this.menu.isOpen)
             this._noticeSeen = true;
 
-        for (const [action] of ACTIONS)
-            this._actionItems[action].setSensitive(view.actions[action]);
-
-        const windowView = windowSwitchView(this._status, {
+        const variant = Main.getStyleVariant() === 'light' ? 'light' : 'dark';
+        this._popover.update(popoverView(this._status, {
             running: this._running,
-            enabled: this._settings.get_boolean('report-active-window'),
-            unavailable: this._windowTracker.unavailable,
-        });
-        this._syncing = true;
-        try {
-            this._micItem.setToggleState(view.mic.on);
-            this._windowItem.setToggleState(windowView.on);
-        } finally {
-            this._syncing = false;
-        }
-        this._micItem.setSensitive(view.mic.sensitive);
-        const micView = this._mic.view();
-        this._micItem.label.text = micView.switchLabel;
-        this._micHintItem.label.text = micView.hint ?? '';
-        this._micHintItem.visible = !!micView.hint;
-        this._windowItem.label.text = windowView.label;
-        this._windowItem.setSensitive(windowView.sensitive);
-        this._micSourceMenu.visible = view.running && this._status.mic?.available === true;
-
-        this._renderIntervals(view);
-        this._intervalMenu.setSensitive(view.intervalSensitive);
-        this._sessionItem.setSensitive(view.pagesSensitive);
-        this._dayItem.setSensitive(view.pagesSensitive);
-    }
-
-    _renderIntervals(view) {
-        const key = JSON.stringify(view.intervals);
-        if (key === this._intervalKey)
-            return;
-        this._intervalKey = key;
-        this._intervalMenu.menu.removeAll();
-        for (const item of view.intervals) {
-            const mi = new PopupMenu.PopupMenuItem(item.label);
-            mi.setOrnament(item.current ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NO_DOT);
-            mi.connect('activate', () => this._setInterval(item.seconds));
-            this._intervalMenu.menu.addMenuItem(mi);
-        }
-    }
-
-    _renderMics() {
-        if (this._destroyed)
-            return;
-        this._micSourceMenu.menu.removeAll();
-        const items = this._mic.view().sources;
-        if (!items.length) {
-            this._micSourceMenu.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-                this._mic.mics ? 'No microphones found' : 'Microphones unavailable', {reactive: false}));
-            return;
-        }
-        for (const item of items) {
-            const mi = new PopupMenu.PopupMenuItem(item.label);
-            mi.setOrnament(item.checked ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NO_DOT);
-            mi.connect('activate', () => this._chooseMic(item));
-            this._micSourceMenu.menu.addMenuItem(mi);
-        }
+            pollError: this._pollError,
+            notice: this._notice,
+            pausedMs: this._reminder.pausedFor(monotonicMs()),
+            mic: this._mic.view(),
+            mics: this._mic.mics,
+            micChoiceLabel: this._mic.preferred.label,
+            window: windowSwitchView(this._status, {
+                running: this._running,
+                enabled: this._settings.get_boolean('report-active-window'),
+                unavailable: this._windowTracker.unavailable,
+            }),
+            app: {base: this._appBase, day: this._day, invalidSetting: this._app.invalidSetting},
+            use24h: this._interface.get_string('clock-format') === '24h',
+            variant,
+            ui: {
+                ...this._popover.ui,
+                assignBusy: this._assignBusy,
+                assignError: this._assignError,
+                intervalBusy: this._intervalBusy,
+                commandBusy: this._commandBusy,
+            },
+        }));
     }
 
     destroy() {
         this._destroyed = true;
-        this._cancelReopen();
+        this._stopDay();
+        this._app.destroy();
+        St.Settings.get().disconnectObject(this);
+        this._interface.disconnectObject(this);
+        this._interface = null;
+        this._popover.destroy();
         this._windowTracker.destroy();
         if (this._timer)
             GLib.source_remove(this._timer);

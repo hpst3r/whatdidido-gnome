@@ -54,5 +54,10 @@
       <summary>Remind to check the microphone after no speech for this long (minutes)</summary>
       <description>While the session is recording with the microphone on and the server transcribes audio, show a notification when no speech has been transcribed for this many minutes, and again every this many minutes. Counted from when the extension first saw the microphone on, or the last speech. Transcripts land about one audio segment (default 60 s) after the speech, so a delay of only a minute or two can remind while you are talking. Servers that don't report transcriptions with text, an audio limit reached or failed, and a captured output monitor never remind. 0 = no reminders.</description>
     </key>
+    <key name="app-url" type="s">
+      <default>''</default>
+      <summary>App server URL</summary>
+      <description>Where the whatdidido app server (the read server that serves /app/) listens, for the menu's Now card, Today bars and links: a loopback http origin such as http://127.0.0.1:18850, nothing else. Empty = find it automatically from the work session's /day redirect. Any other value is treated as invalid: the Now card and Today bars are hidden and the menu says so.</description>
+    </key>
   </schema>
 </schemalist>

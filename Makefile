@@ -24,6 +24,11 @@ test:
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
 	gjs -m tests/mic_scenarios_test.js $(TEST_RUNTIME)/mic-scenarios
 	gjs -m tests/mic_review_toggle_race_test.js $(TEST_RUNTIME)/mic-toggle-race
+	gjs -m tests/day_model_test.js
+	gjs -m tests/popover_model_test.js
+	gjs -m tests/app_client_test.js $(TEST_RUNTIME)/app-client
+	gjs -m tests/app_redirect_test.js
+	gjs -m tests/shots/fakes_test.js $(TEST_RUNTIME)/shots-fakes
 
 # Read-only check against the running server (control.json in $XDG_RUNTIME_DIR).
 live:
@@ -35,7 +40,7 @@ check: test
 
 pack: check
 	mkdir -p build  # gnome-extensions pack segfaults if -o dir is missing
-	cd $(SRC) && gnome-extensions pack --force --extra-source=lib --schema=schemas/$(SCHEMA) -o ../build .
+	cd $(SRC) && gnome-extensions pack --force --extra-source=lib --extra-source=icons --schema=schemas/$(SCHEMA) -o ../build .
 
 # Symlink install for development. GNOME Shell on Wayland only picks up a new
 # extension after re-login (or use `make nested`).
@@ -53,3 +58,10 @@ uninstall:
 # the real session is untouched. GNOME 49+ needs mutter-devkit. NESTED_SIZE=WxH.
 nested: install
 	scripts/nested.sh
+
+# Screenshots of the menu in an isolated headless shell (scripts/shots.sh,
+# tests/shots/README.md): build/shots/<scenario>-<dark|light>.png.
+# SCENARIOS="a b" picks some.
+.PHONY: shots
+shots:
+	scripts/shots.sh $(SCENARIOS)

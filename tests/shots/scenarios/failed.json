@@ -1,0 +1,6 @@
+{
+  "extends": "recording-full",
+  "description": "Failed with a last error.",
+  "tags": ["state"],
+  "control": {"status": {"state": "failed", "pending": 0, "describe_withheld": null, "audio_capturing": false, "audio_state": "pending", "last_error": "Screen capture stopped: the portal session was closed", "reason": "capture_lost", "mic": {"state": "pending"}}}
+}
