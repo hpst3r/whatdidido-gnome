@@ -122,8 +122,11 @@ function micLive(status, running) {
 
 const BUSY = ['starting', 'recording', 'recovering', 'stopping'];
 
-export function pollPeriod(state, menuOpen, fast = 2, slow = 10) {
-    const p = menuOpen || BUSY.includes(state) ? fast : slow;
+// watching: window reports are wanted while paused or stopped too
+// (WindowReporter.watching, AT_REST_GUARD.md A2.2), so a start or resume is
+// seen within one fast poll.
+export function pollPeriod(state, menuOpen, fast = 2, slow = 10, watching = false) {
+    const p = menuOpen || BUSY.includes(state) || (watching && ['paused', 'stopped'].includes(state)) ? fast : slow;
     return Math.max(1, p);
 }
 

@@ -65,6 +65,11 @@ export class WindowTracker {
         return this._reporter.unavailable;
     }
 
+    // Poll at poll-active while paused or stopped too (WindowReporter.watching).
+    get watching() {
+        return this._reporter.watching;
+    }
+
     // After every status poll (status null when the server is not running).
     updateStatus(status, running) {
         this._reporter.updateStatus(status, running);

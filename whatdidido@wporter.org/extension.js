@@ -127,7 +127,10 @@ class Indicator extends PanelMenu.Button {
                 if (this.menu.isOpen)
                     this._loadDay();
             }),
-            this._settings.connect('changed::report-active-window', () => this._render()),
+            this._settings.connect('changed::report-active-window', () => {
+                this._render();
+                this._schedule();
+            }),
             this._settings.connect('changed::pause-reminder-minutes', () => this._applyReminder(
                 this._reminder.setMinutes(this._settings.get_uint('pause-reminder-minutes'), monotonicMs()))),
             this._settings.connect('changed::mic-reminder-minutes', () => this._applyMicReminder(
@@ -161,7 +164,7 @@ class Indicator extends PanelMenu.Button {
         if (this._timer)
             GLib.source_remove(this._timer);
         const period = pollPeriod(this._running ? this._status?.state : null, this.menu.isOpen,
-            this._settings.get_uint('poll-active'), this._settings.get_uint('poll-idle'));
+            this._settings.get_uint('poll-active'), this._settings.get_uint('poll-idle'), this._windowTracker.watching);
         this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, period, () => {
             this._timer = 0;
             this._refresh();

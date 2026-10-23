@@ -191,8 +191,13 @@ export function windowActivityOffered(status, running) {
     return !!running && status?.window_activity?.available === true;
 }
 
+// Paused too while the session takes geometry (AT_REST_GUARD.md A2.2): its
+// at-rest guard holds the first frames after a resume until a focus report
+// arrives, and answers paused reports with recorded: false.
 export function windowEligible(status, running) {
-    return windowActivityOffered(status, running) && status.state === 'recording';
+    if (!windowActivityOffered(status, running))
+        return false;
+    return status.state === 'recording' || (status.state === 'paused' && windowGeometry(status, running));
 }
 
 // window_activity.epoch (Amendment 1): bumped by the server whenever it
@@ -237,7 +242,9 @@ export function formatExcludedApps(list) {
 // Decides when to POST the focused window.
 //
 // - Active only while enabled, the last poll showed window_activity.available
-//   and state "recording", and no 409 came back since that poll.
+//   and state "recording" (or "paused" with window_activity.geometry), and no
+//   409 came back since that poll. A paused report is answered with
+//   recorded: false, which is a success like any 202.
 // - changed() (re)arms a SETTLE_MS timer; on fire the payload is built from
 //   the *current* focus and skipped if equal to the last one sent.
 // - At most one POST per SPACING_MS, one in flight at a time; a send inside
@@ -245,8 +252,9 @@ export function formatExcludedApps(list) {
 // - Becoming active (transition into recording, from unavailable, setting
 //   turned on) forgets the last payload and sends at once (spacing permitting).
 //   So does a changed window_activity.epoch between two polls while active
-//   (a pause and resume, or a recovery, the polls did not see), and a
-//   changed window_activity.geometry (the keys the session accepts changed).
+//   (a start, resume or recovery, seen or not by the polls), a paused ->
+//   recording edge, and a changed window_activity.geometry (the keys the
+//   session accepts changed).
 // - monitors and changed_at are added only while the last poll showed
 //   window_activity.geometry === true. changed_at is the wall-clock time of
 //   the last changed() call (the shell signal), or of construction before
@@ -282,6 +290,7 @@ export class WindowReporter {
         this._generation = 0;       // bumped whenever _last is forgotten
         this._epoch = null;         // window_activity.epoch of the last poll
         this._geometry = false;     // window_activity.geometry of the last poll
+        this._recording = false;    // the last poll showed state "recording"
         this._changedAt = wallNow(); // wall-clock ms of the last change signal
         this._lastSendAt = -Infinity;
         this._settleTimer = null;
@@ -304,6 +313,14 @@ export class WindowReporter {
 
     get geometry() {
         return this._geometry;
+    }
+
+    // The session's at-rest guard wants focus reports (enabled, geometry
+    // offered, no 409 since the last poll), whatever its state: the
+    // extension then polls at poll-active while paused or stopped too, so a
+    // start or resume is seen quickly (AT_REST_GUARD.md A2.2).
+    get watching() {
+        return !this._destroyed && this._enabled && this._geometry && !this._unavailable;
     }
 
     setEnabled(on) {
@@ -330,10 +347,13 @@ export class WindowReporter {
         const geometry = windowGeometry(status, running);
         const geometryChanged = geometry !== this._geometry;
         this._geometry = geometry;
+        const recording = windowEligible(status, running) && status.state === 'recording';
+        const resumed = recording && !this._recording;
+        this._recording = recording;
         this._update(() => {
             this._eligible = windowEligible(status, running);
             this._unavailable = false;
-        }, epochChanged || geometryChanged);
+        }, epochChanged || geometryChanged || resumed);
         // Not recording (or not offered) any more: the server no longer
         // attributes time to the last window, so "none" is not needed.
         if (!this._eligible)
