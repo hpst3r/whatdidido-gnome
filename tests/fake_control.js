@@ -6,7 +6,10 @@
 // POST /control/v1/window follows whatdidido TIME_ACCOUNTING.md section 3
 // and Amendment 2 (8 KiB body limit; offered only when `windowActivity` is
 // set). Its sanitiser is written independently of lib/window_model.js on
-// purpose, so the client tests cross-check the two.
+// purpose, so the client tests cross-check the two. With `windowGeometry`
+// set it is a session of CONTROL_API.md Amendment 4 (window_activity.geometry,
+// optional `monitors` and `changed_at`); without it, an older session that
+// refuses those keys with 400 invalid.
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
@@ -18,6 +21,16 @@ const BODY_KEYS = {
 };
 const BODY_LIMIT = {'/control/v1/window': 8192};  // bytes (Amendment 2 item 1); everything else 1 KiB
 const WINDOW_FIELDS = ['app_id', 'app_name', 'wm_class', 'title'];
+const GEOMETRY_KEYS = ['monitors', 'changed_at'];
+const COORD = 2 ** 31 - 1;
+const INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|\+00:00)$/;
+
+// Amendment 4: up to 16 [x, y, w, h] integer arrays, w and h from 1.
+function monitorsOk(v) {
+    const int = (n, lo) => Number.isInteger(n) && n >= lo && n <= COORD;
+    return Array.isArray(v) && v.length <= 16 && v.every(m => Array.isArray(m) && m.length === 4 &&
+        int(m[0], -COORD) && int(m[1], -COORD) && int(m[2], 1) && int(m[3], 1));
+}
 
 // Server-side sanitising (section 3), byte-counted with TextEncoder.
 function sanitizeWindowBody(body) {
@@ -29,6 +42,9 @@ function sanitizeWindowBody(body) {
         const chars = Array.from(body[k].replace(/[\x00-\x1f\x7f-\x9f]/g, ' '));
         out[k] = chars.slice(0, k === 'title' ? 1024 : 255).join('');
     }
+    // Stored as compact JSON and counted in the budget; changed_at is not stored.
+    if ('monitors' in body)
+        out.monitors = JSON.stringify(body.monitors);
     const size = o => Object.entries(o).reduce((n, [k, v]) => n + enc.encode(k).length + enc.encode(v).length, 0);
     if (size(out) > 3500) {
         const chars = Array.from(out.title);
@@ -75,6 +91,8 @@ export class FakeControl {
         // windowEpochReported = false mimics an older server without it.
         this.windowEpoch = 0;
         this.windowEpochReported = true;
+        // Amendment 4: window_activity.geometry and the optional keys.
+        this.windowGeometry = false;
         // Hold POST /window replies (already processed) until releaseWindowReplies().
         this.holdWindowReplies = false;
         this._held = [];
@@ -138,7 +156,9 @@ export class FakeControl {
             } catch {
                 return this._reply(msg, 400, {error: 'invalid'});
             }
-            const keys = Object.keys(body ?? {}).sort().join(',');
+            // A geometry session checks the optional window keys in _window().
+            const optional = path === '/control/v1/window' && this.windowGeometry ? GEOMETRY_KEYS : [];
+            const keys = Object.keys(body ?? {}).filter(k => !optional.includes(k)).sort().join(',');
             if (!(BODY_KEYS[path] ?? []).some(k => k.slice().sort().join(',') === keys))
                 return this._reply(msg, 400, {error: 'invalid'});
         }
@@ -222,7 +242,8 @@ export class FakeControl {
 
     _windowStatus() {
         const wa = {available: true, recorded: this.windows.length, dropped: this.windowDropped};
-        return this.windowEpochReported ? {...wa, epoch: this.windowEpoch} : wa;
+        const withEpoch = this.windowEpochReported ? {...wa, epoch: this.windowEpoch} : wa;
+        return this.windowGeometry ? {...withEpoch, geometry: true} : withEpoch;
     }
 
     // Start, pause, resume and recovery forget the last window and bump the
@@ -252,7 +273,9 @@ export class FakeControl {
     _window(msg, body) {
         const shapeOk = body.focus === 'none'
             ? Object.keys(body).length === 1
-            : body.focus === 'window' && WINDOW_FIELDS.every(k => typeof body[k] === 'string');
+            : body.focus === 'window' && WINDOW_FIELDS.every(k => typeof body[k] === 'string') &&
+              (!('monitors' in body) || monitorsOk(body.monitors)) &&
+              (!('changed_at' in body) || (typeof body.changed_at === 'string' && INSTANT_RE.test(body.changed_at)));
         if (!shapeOk)
             return this._reply(msg, 400, {error: 'invalid'});
         if (!this.windowActivity)
