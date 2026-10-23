@@ -120,6 +120,11 @@ tracker.updateStatus({state: 'recording', window_activity: {available: true, rec
 eq('payload carries the focused window\'s monitors', [sent.at(-1)?.title, sent.at(-1)?.monitors],
     ['B', [[1920, 0, 1920, 1080]]]);
 eq('payload carries changed_at', typeof sent.at(-1)?.changed_at, 'string');
+tracker.updateStatus({state: 'stopped', window_activity: {available: true, recorded: 0, dropped: 0, epoch: 0,
+    geometry: true}}, true);
+eq('watching while stopped (poll-active cadence)', tracker.watching, true);
+tracker.updateStatus(null, false);
+eq('not watching while not running', tracker.watching, false);
 
 tracker.destroy();
 eq('destroy disconnects everything',
