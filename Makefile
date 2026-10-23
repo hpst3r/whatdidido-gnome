@@ -20,8 +20,13 @@ test:
 	gjs -m tests/window_stale_dedupe_test.js
 	gjs -m tests/window_disable_none_test.js
 	gjs -m tests/window_log_once_test.js
+	gjs -m tests/window_geometry_test.js
+	gjs -m tests/window_paused_test.js
+	gjs -m tests/window_burst_test.js
+	gjs -m tests/window_tracker_test.js
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
+	gjs -m tests/window_geometry_client_test.js $(TEST_RUNTIME)/geometry
 	gjs -m tests/mic_scenarios_test.js $(TEST_RUNTIME)/mic-scenarios
 	gjs -m tests/mic_review_toggle_race_test.js $(TEST_RUNTIME)/mic-toggle-race
 	gjs -m tests/day_model_test.js

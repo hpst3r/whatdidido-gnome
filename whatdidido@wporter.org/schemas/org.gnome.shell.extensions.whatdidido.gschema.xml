@@ -5,13 +5,13 @@
       <range min="1" max="60"/>
       <default>2</default>
       <summary>Poll interval while active (seconds)</summary>
-      <description>Used while the menu is open or the session is starting, recording, reconnecting or stopping.</description>
+      <description>Used while the menu is open or the session is starting, recording, reconnecting or stopping, and while it is paused or stopped when the active window is reported to a session with the at-rest guard.</description>
     </key>
     <key name="poll-idle" type="u">
       <range min="2" max="3600"/>
       <default>10</default>
       <summary>Poll interval while idle (seconds)</summary>
-      <description>Used while the session is stopped, paused or failed, or the server is not running.</description>
+      <description>Used while the session is stopped, paused or failed, or the server is not running (stopped or paused use poll-active instead while the active window is reported to a session with the at-rest guard).</description>
     </key>
     <key name="microphone-stable-id" type="s">
       <default>''</default>
