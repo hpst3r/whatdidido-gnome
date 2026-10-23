@@ -189,14 +189,30 @@ carries:
   window that is on no monitor sends no `monitors` key, so the session treats
   its monitors as unknown.
 - `changed_at`: when the focus, the title, the WM class or the window's monitor
-  set last changed (UTC, millisecond precision, `2026-10-23T12:34:56.789Z`). It
-  is taken when the shell signal fired, not when the report is sent after the
-  1 s settle, so the session can match it with screenshots captured in between.
+  set changed (UTC, millisecond precision, `2026-10-23T12:34:56.789Z`). It is
+  taken when the shell signal fired, not when the report is sent after the 1 s
+  settle, so the session can match it with screenshots captured in between.
 
 Moving or resizing the focused window, and monitor layout changes, are only
 reported when they change the window's set of monitors (not on every pixel of a
 drag). The usual 1 s settle and 2 s spacing apply, and a report that only
-differs in `changed_at` isn't sent again. The monitor rectangles count toward
+differs in `changed_at` isn't sent again.
+
+Changes that come within one settle are a burst, sent as one report (its
+`AT_REST_GUARD.md` Amendment 2, A2.3). That report carries the **union** of the
+monitor sets seen during the burst and the burst's **first** change time, so
+every screenshot captured during it is matched with every monitor the window
+was on (dropping too much is the safe direction). Dragging a window from
+monitor 1 across to monitor 2 within 1 s sends both monitors, stamped when it
+first reached monitor 2; when the union is more than where the window ended
+up, its current monitors follow one settle later. A failed report is retried
+with its union and time.
+
+**Limit:** a window focused for less than the settle, such as alt-tabbing
+through a password manager to another window, is never reported by name: the
+burst reports the window focused at its end (with the monitors of both). A
+screenshot captured while the password manager was focused is then matched
+with the other window, so only the session's text rules apply to it. The monitor rectangles count toward
 the 3500-byte limit, so a long title is shortened sooner. **An older session
 that doesn't advertise `geometry` gets exactly the reports described above,
 with neither key** (it would refuse them with `400 invalid`). `{"focus":
