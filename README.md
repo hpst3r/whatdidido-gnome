@@ -154,10 +154,12 @@ name, the WM class and the window title, or "no focused window".
 
 - Sent only while the last status poll shows the session **recording** and the
   server offering window activity, and the **Record active window** setting is
-  on. Nothing is sent while paused, reconnecting, stopped or not running.
+  on. Nothing is sent while reconnecting, stopped or not running, nor while
+  paused, except to a session that advertises `geometry` (below).
 - Changes (focus, title, WM class) settle for 1 s, then the current window is
   sent if it differs from the last one sent; at most one request per 2 s.
-  After every start/resume/reconnect the current window is sent again.
+  After every start/resume/reconnect the current window is sent again at once
+  (no settle).
   So it is when the status's `window_activity.epoch` changed since the last poll
   (a pause/resume or recovery between two polls); servers without it are fine.
 - A failed report (no answer, timeout, 5xx, 400) is retried with the window
@@ -200,6 +202,20 @@ that doesn't advertise `geometry` gets exactly the reports described above,
 with neither key** (it would refuse them with `400 invalid`). `{"focus":
 "none"}` never carries them.
 
+After a start, resume or reconnect, the session holds each screenshot until
+the first window report of the new `window_activity.epoch` arrives (its
+`AT_REST_GUARD.md` Amendment 2, A2.2). So, with such a session and **Record
+active window** on, the extension:
+
+- polls the status at `poll-active` (2 s) while the session is paused or
+  stopped too, not `poll-idle`, so a start or resume is seen within one poll;
+- reports the focused window while **paused** too, with `changed_at`, so a
+  password manager focused during a pause is known at the resume. The session
+  answers these with `recorded: false` (not counted as active time), which is
+  a success: nothing is retried;
+- sends the current window at once when the epoch changes, and when the
+  session goes from paused to recording.
+
 ## Privacy
 
 - The server writes `$XDG_RUNTIME_DIR/whatdidido/control.json` (mode 0600,
@@ -220,9 +236,10 @@ with neither key** (it would refuse them with `400 invalid`). `{"focus":
 - Microphone capture is only offered when the server was started with
   `--allow-audio-capture`; otherwise the switch is insensitive.
 - Window titles, app ids/names and WM classes are sent only to the loopback
-  work session from the control file, only while it is recording (never while
-  paused), and only when the server offers it and **Record active window** is
-  on. Apps listed in `window-title-excluded-apps` are reported with an empty
+  work session from the control file, only while it is recording (or paused,
+  to a session whose at-rest guard is configured; those reports are not
+  counted as active time), and only when the server offers it and **Record
+  active window** is on. Apps listed in `window-title-excluded-apps` are reported with an empty
   title. Window data is never logged; send errors are logged once per distinct
   message (the last 32 remembered) without titles or the token. The server stores reports as event
   metadata (see whatdidido's `TIME_ACCOUNTING.md` for where that can go).
@@ -235,7 +252,7 @@ with neither key** (it would refuse them with `400 invalid`). `{"focus":
 
 | Key | Default | |
 |---|---|---|
-| `poll-active` | 2 s | menu open, or starting/recording/reconnecting/stopping |
+| `poll-active` | 2 s | menu open, or starting/recording/reconnecting/stopping; also paused/stopped while the at-rest guard wants window reports |
 | `poll-idle` | 10 s | stopped/paused/failed/not running |
 | `microphone-stable-id` | empty | chosen in the menu (stable across reconnects); empty = none chosen |
 | `microphone-id` | empty | chosen microphone's opaque id; only used without a stable id; never a fallback to another microphone |
