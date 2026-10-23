@@ -130,15 +130,24 @@ function compareRects(a, b) {
     return 0;
 }
 
-// The monitors the window's frame rect intersects with a positive area:
-// sorted by x, then y (then size), deduplicated, at most MONITORS_MAX.
-// Empty when the frame is unknown or off every monitor.
+// Sorted by x, then y (then size), deduplicated, at most MONITORS_MAX.
+function monitorList(rects) {
+    const sorted = [...rects].sort(compareRects);
+    return sorted.filter((m, i) => i === 0 || compareRects(m, sorted[i - 1]) !== 0).slice(0, MONITORS_MAX);
+}
+
+// The monitors the window's frame rect intersects with a positive area, as
+// a monitorList(). Empty when the frame is unknown or off every monitor.
 export function windowMonitors(frame, layout) {
     const win = rectOf(frame);
     if (!win)
         return [];
-    const hits = (layout ?? []).map(rectOf).filter(m => m && rectsIntersect(win, m)).sort(compareRects);
-    return hits.filter((m, i) => i === 0 || compareRects(m, hits[i - 1]) !== 0).slice(0, MONITORS_MAX);
+    return monitorList((layout ?? []).map(rectOf).filter(m => m && rectsIntersect(win, m)));
+}
+
+// Two windowMonitors() results (either may be missing) as one monitorList().
+export function unionMonitors(a, b) {
+    return monitorList([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]);
 }
 
 export function sameMonitors(a, b) {
@@ -155,8 +164,9 @@ export function rfc3339(ms) {
 // null/undefined; frame is the window's frame rect, layout the monitor
 // rectangles. geometry: the last poll showed window_activity.geometry;
 // only then are monitors (when non-empty; none means "unknown") and
-// changed_at (ms since the epoch, when known) added.
-export function windowPayload(raw, excluded = [], {geometry = false, changedAt = null} = {}) {
+// changed_at (ms since the epoch, when known) added. seen: monitor sets
+// already seen in this burst (AT_REST_GUARD.md A2.3), added to the window's.
+export function windowPayload(raw, excluded = [], {geometry = false, changedAt = null, seen = []} = {}) {
     if (!raw)
         return {focus: 'none'};
     const str = v => (typeof v === 'string' ? v : '');
@@ -171,7 +181,7 @@ export function windowPayload(raw, excluded = [], {geometry = false, changedAt =
         title: isExcluded(appId, excluded) ? '' : str(raw.title),
     };
     if (geometry) {
-        const monitors = windowMonitors(raw.frame, raw.layout);
+        const monitors = unionMonitors(windowMonitors(raw.frame, raw.layout), seen);
         if (monitors.length > 0)
             payload.monitors = monitors;
         if (Number.isFinite(changedAt))
@@ -256,9 +266,17 @@ export function formatExcludedApps(list) {
 //   recording edge, and a changed window_activity.geometry (the keys the
 //   session accepts changed).
 // - monitors and changed_at are added only while the last poll showed
-//   window_activity.geometry === true. changed_at is the wall-clock time of
-//   the last changed() call (the shell signal), or of construction before
-//   any, whenever the payload is actually sent. Dedupe ignores it.
+//   window_activity.geometry === true. Dedupe ignores changed_at.
+// - A burst is the changed() calls while active up to the payload built
+//   from them (one settle, or longer when spacing or a failed POST delays
+//   it). Its payload carries the union of the monitor sets read at each
+//   call and at build time, stamped with the burst's first change time
+//   (AT_REST_GUARD.md A2.3: over-dropping is the safe direction). When the
+//   union is more than the window's current set, a follow-up burst starting
+//   at build time reports the current set after the settle. Without a burst
+//   (becoming active, a re-send), changed_at is the time of the last
+//   changed() call, or of construction before any. A failed POST puts its
+//   burst back (merged with any newer one) for the retry.
 // - Becoming inactive cancels every pending timer. Turning the setting off
 //   while active sends {"focus": "none"} once (after any request in flight,
 //   spacing permitting; never retried), unless recording/availability ends
@@ -292,6 +310,7 @@ export class WindowReporter {
         this._geometry = false;     // window_activity.geometry of the last poll
         this._recording = false;    // the last poll showed state "recording"
         this._changedAt = wallNow(); // wall-clock ms of the last change signal
+        this._burst = null;         // unsent changes while active: {since, monitors}
         this._lastSendAt = -Infinity;
         this._settleTimer = null;
         this._spacingTimer = null;
@@ -366,12 +385,12 @@ export class WindowReporter {
         this._changedAt = this._wallNow();
         if (!this.active)
             return;
+        this._burst ??= {since: this._changedAt, monitors: []};
+        if (this._geometry)
+            this._burst.monitors = unionMonitors(this._burst.monitors, this._currentMonitors(this._readFocus()));
         this._clear('_settleTimer');
         this._clear('_retryTimer');
-        this._settleTimer = this._setTimer(this._settleMs, () => {
-            this._settleTimer = null;
-            this._flush();
-        });
+        this._armSettle();
     }
 
     destroy() {
@@ -380,6 +399,19 @@ export class WindowReporter {
         this._clear('_settleTimer');
         this._clear('_spacingTimer');
         this._clear('_retryTimer');
+    }
+
+    _armSettle() {
+        if (this._settleTimer !== null)
+            return;
+        this._settleTimer = this._setTimer(this._settleMs, () => {
+            this._settleTimer = null;
+            this._flush();
+        });
+    }
+
+    _currentMonitors(raw) {
+        return raw ? windowMonitors(raw.frame, raw.layout) : [];
     }
 
     _clear(name) {
@@ -403,6 +435,7 @@ export class WindowReporter {
             this._clear('_retryTimer');
             this._flush();
         } else if (was && !is) {
+            this._burst = null;
             this._clear('_settleTimer');
             this._clear('_spacingTimer');
             this._clear('_retryTimer');
@@ -437,11 +470,21 @@ export class WindowReporter {
             this._post({focus: 'none'});
             return;
         }
-        const payload = windowPayload(this._readFocus(), this._excluded,
-            {geometry: this._geometry, changedAt: this._changedAt});
+        const raw = this._readFocus();
+        const burst = this._burst;
+        this._burst = null;
+        const payload = windowPayload(raw, this._excluded,
+            {geometry: this._geometry, changedAt: burst?.since ?? this._changedAt, seen: burst?.monitors});
+        if (payload.monitors) {
+            const current = this._currentMonitors(raw);
+            if (!sameMonitors(payload.monitors, current)) {
+                this._burst = {since: this._wallNow(), monitors: current};
+                this._armSettle();
+            }
+        }
         if (samePayload(payload, this._last))
             return;
-        this._post(payload);
+        this._post(payload, burst);
     }
 
     _logOnce(msg) {
@@ -462,7 +505,7 @@ export class WindowReporter {
         });
     }
 
-    async _post(payload) {
+    async _post(payload, burst = null) {
         const generation = this._generation;
         this._clear('_retryTimer');
         this._inFlight = true;
@@ -481,6 +524,12 @@ export class WindowReporter {
             // The server may or may not have recorded it: dedupe against
             // nothing until a POST succeeds.
             this._forget();
+            if (burst) {
+                const newer = this._burst;
+                this._burst = newer
+                    ? {since: Math.min(burst.since, newer.since), monitors: unionMonitors(burst.monitors, newer.monitors)}
+                    : burst;
+            }
             if (e?.code === 'unavailable') {
                 this._update(() => {
                     this._unavailable = true;

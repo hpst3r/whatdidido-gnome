@@ -1,8 +1,9 @@
 // Run: gjs -m tests/window_geometry_test.js
 // The at-rest guard's window geometry (whatdidido AT_REST_GUARD.md section 6,
 // CONTROL_API.md Amendment 4): the monitors the focused window's frame
-// intersects, changed_at taken when the shell signal fired, both sent only
-// while the last poll showed window_activity.geometry === true.
+// intersects, changed_at taken when the shell signal fired (the first one of
+// a burst, tests/window_burst_test.js), both sent only while the last poll
+// showed window_activity.geometry === true.
 import System from 'system';
 
 import {
@@ -205,14 +206,14 @@ async function reporterTests() {
     eq('sent at t=11000 with changed_at from t=10000',
         [h.sent.at(-1).at, h.last().changed_at, h.last().monitors], [11000, wall(10000), [M1]]);
 
-    // A re-armed settle keeps the latest signal's time.
+    // A re-armed settle keeps the burst's first signal time (A2.3).
     await h.advance(5000);                  // t=16000
     h.focus = {...h.focus, title: 'three'};
     h.r.changed();
     await h.advance(600);
     h.r.changed();                          // t=16600
     await h.advance(1000);
-    eq('re-armed settle: changed_at of the last signal', h.last().changed_at, wall(16600));
+    eq('re-armed settle: changed_at of the first signal', h.last().changed_at, wall(16000));
 
     // Spacing delays the POST; changed_at stays at the signal.
     h = harness();
