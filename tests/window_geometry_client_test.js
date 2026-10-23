@@ -42,8 +42,9 @@ const bodyOf = req => JSON.parse(req.body);
 const windowPosts = fake => fake.requests.filter(r => r.method === 'POST' && r.path === '/control/v1/window');
 
 // A real reporter on GLib timers, fed by the client's status.
-function reporter(client, focus) {
+function reporter(client, focus, opts = {}) {
     return new WindowReporter({
+        ...opts,
         now: () => GLib.get_monotonic_time() / 1000,
         wallNow: () => T0,
         setTimer: (ms, fn) => GLib.timeout_add(GLib.PRIORITY_DEFAULT, Math.max(0, Math.ceil(ms)), () => {
@@ -113,6 +114,29 @@ async function main() {
         check('session dedupe includes monitors', moved.recorded === true, JSON.stringify(moved));
         r.destroy();
         r = null;
+
+        // --- paused (AT_REST_GUARD.md A2.2): reported, recorded: false, no retry --
+        fake.status.state = 'paused';
+        fake.forgetWindow();
+        status = await client.status(null);
+        const before = windowPosts(fake).length, recordedBefore = fake.windows.length;
+        r = reporter(client, focus, {retryMinMs: 20, retryMaxMs: 20});
+        r.updateStatus(status, true);
+        await waitFor(() => windowPosts(fake).length === before + 1);
+        const paused = bodyOf(windowPosts(fake).at(-1));
+        check('paused: the focus is reported with monitors and changed_at',
+            windowPosts(fake).length === before + 1 && paused.changed_at === '2026-10-23T12:00:00.250Z' &&
+            Array.isArray(paused.monitors), JSON.stringify(paused));
+        await new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+        }));
+        check('paused: answered recorded: false, not recorded, not retried',
+            windowPosts(fake).length === before + 1 && fake.windows.length === recordedBefore && r.active,
+            `posts=${windowPosts(fake).length - before} recorded=${fake.windows.length - recordedBefore}`);
+        r.destroy();
+        r = null;
+        fake.status.state = 'recording';
 
         // --- the title gives way to the monitors, identically on both sides ------
         fake.resetWindows();
