@@ -1,6 +1,7 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -110,6 +111,7 @@ class Indicator extends PanelMenu.Button {
             send: payload => this._client.postWindow(payload, this._actionCancellable),
             log: message => console.warn(message),
             onUnavailable: () => this._render(),
+            apps: Shell.WindowTracker.get_default(),
         });
 
         this._settingsIds = [

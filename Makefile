@@ -21,6 +21,7 @@ test:
 	gjs -m tests/window_disable_none_test.js
 	gjs -m tests/window_log_once_test.js
 	gjs -m tests/window_geometry_test.js
+	gjs -m tests/window_tracker_test.js
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
 	gjs -m tests/window_geometry_client_test.js $(TEST_RUNTIME)/geometry
