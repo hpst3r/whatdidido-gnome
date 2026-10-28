@@ -115,6 +115,7 @@ export function isExcluded(appId, excluded) {
 export const TITLE_RULES_MAX = 100;
 export const TITLE_RULE_FIELD_MAX = 200;
 export const TITLE_RULE_MATCH_MAX = 1024;  // stub (RED)
+export const TITLE_RULE_PATTERN_MAX = 200;  // stub (RED)
 export function titleEntryProblem() {
     return null;
 }

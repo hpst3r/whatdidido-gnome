@@ -11,7 +11,7 @@ import GLib from 'gi://GLib';
 import System from 'system';
 
 import {
-    TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX, TITLE_RULE_MATCH_MAX, TITLE_MAX_CHARS, globMatch, compileTitleRules,
+    TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX, TITLE_RULE_PATTERN_MAX, TITLE_RULE_MATCH_MAX, TITLE_MAX_CHARS, globMatch, compileTitleRules,
     applyTitleRules, titleRuleProblem, titleEntryProblem, parseTitleRule, formatTitleRules, sameCounter, counterTick,
     windowPayload,
 } from '../whatdidido@wporter.org/lib/window_model.js';
@@ -27,7 +27,9 @@ function eq(name, got, want) {
     }
 }
 
-eq('caps', [TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX, TITLE_RULE_MATCH_MAX], [100, 200, 4096]);
+// 60-character patterns: the matcher's state fits two 32-bit words, which
+// keeps the worst case at the caps inside a frame (see adversarial below).
+eq('caps', [TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX, TITLE_RULE_PATTERN_MAX, TITLE_RULE_MATCH_MAX], [100, 200, 60, 4096]);
 
 // --- globMatch ----------------------------------------------------------------------
 eq('* any run, whole title', [
@@ -83,7 +85,7 @@ const rand = n => {
 };
 let mismatches = 0, matches = 0;
 for (let n = 0; n < 3000; n++) {
-    const plen = rand(70), tlen = rand(90);
+    const plen = rand(TITLE_RULE_PATTERN_MAX + 1), tlen = rand(90);
     const p = Array.from({length: plen}, () => 'aAb*?'[rand(5)]).join('');
     const t = Array.from({length: tlen}, () => 'abB'[rand(3)]).join('');
     const want = reference(p, t);
@@ -95,21 +97,23 @@ for (let n = 0; n < 3000; n++) {
 eq('agrees with a reference matcher on 3000 random cases', mismatches, 0);
 eq('the random cases include matches', matches > 100, true);
 eq('long literal across word boundaries', [
-    globMatch('x'.repeat(31) + '?' + 'y'.repeat(40), 'x'.repeat(31) + 'Q' + 'y'.repeat(40)),
-    globMatch('x'.repeat(31) + '*' + 'y'.repeat(40), 'x'.repeat(31) + 'qqq' + 'y'.repeat(40)),
-    globMatch('x'.repeat(31) + '*' + 'y'.repeat(40), 'x'.repeat(30) + 'qqq' + 'y'.repeat(40)),
-    globMatch('x'.repeat(64), 'x'.repeat(64)), globMatch('x'.repeat(64), 'x'.repeat(63)),
+    globMatch('x'.repeat(31) + '?' + 'y'.repeat(28), 'x'.repeat(31) + 'Q' + 'y'.repeat(28)),
+    globMatch('x'.repeat(31) + '*' + 'y'.repeat(28), 'x'.repeat(31) + 'qqq' + 'y'.repeat(28)),
+    globMatch('x'.repeat(31) + '*' + 'y'.repeat(28), 'x'.repeat(30) + 'qqq' + 'y'.repeat(28)),
+    globMatch('x'.repeat(60), 'x'.repeat(60)), globMatch('x'.repeat(60), 'x'.repeat(59)),
 ], [true, true, false, true, false]);
 
 // --- adversarial performance ----------------------------------------------------------
-// A catastrophic-backtracking shape for regex engines: 100 rules of 200
-// characters (the caps) against the longest title that is matched (4096
-// characters). One title change runs this once in the shell's main loop: it
-// has to fit well inside a 16 ms frame. Best of 5, against machine noise.
-const evilPattern = '*a'.repeat(99) + '*b';
-eq('adversarial pattern is at the cap', [...evilPattern].length, TITLE_RULE_FIELD_MAX);
+// A catastrophic-backtracking shape for regex engines: 100 rules of 60
+// characters (the caps) that never die and never match, against the longest
+// title that is matched (4096 characters). One title change runs this once
+// in the shell's main loop: it has to fit well inside a 16 ms frame. Best
+// of 5, against machine noise.
+const evilPattern = '*a'.repeat(29) + '*b', evilPattern2 = `*${'a?'.repeat(29)}b`;
+eq('adversarial patterns are at the cap', [[...evilPattern].length, [...evilPattern2].length],
+    [TITLE_RULE_PATTERN_MAX, TITLE_RULE_PATTERN_MAX]);
 const evilRules = compileTitleRules(Array.from({length: TITLE_RULES_MAX}, (_, i) =>
-    ['', i % 2 ? evilPattern : `${'a?'.repeat(99)}b*`, 'x'])).rules;
+    ['', i % 2 ? evilPattern : evilPattern2, 'x'.repeat(TITLE_RULE_FIELD_MAX)])).rules;
 const best = fn => {
     let ms = Infinity, result;
     for (let i = 0; i < 5; i++) {
@@ -122,7 +126,7 @@ const best = fn => {
 const evilTitle = 'a'.repeat(TITLE_RULE_MATCH_MAX);
 let [result, elapsed] = best(() => applyTitleRules(evilTitle, '', '', evilRules));
 eq('adversarial: no rule matches', result, evilTitle);
-print(`     adversarial: ${TITLE_RULES_MAX} rules x ${TITLE_RULE_FIELD_MAX} chars on a ${TITLE_RULE_MATCH_MAX}-char title in ${elapsed.toFixed(2)} ms`);
+print(`     adversarial: ${TITLE_RULES_MAX} rules x ${TITLE_RULE_PATTERN_MAX} chars on a ${TITLE_RULE_MATCH_MAX}-char title in ${elapsed.toFixed(2)} ms`);
 eq('adversarial: the caps fit well inside a frame (under 8 ms)', elapsed < 8, true);
 [result, elapsed] = best(() => applyTitleRules('a'.repeat(1000000), '', '', evilRules));
 print(`     adversarial: a 1000000-char title in ${elapsed.toFixed(2)} ms`);
@@ -136,11 +140,12 @@ eq('refused: empty pattern', typeof titleRuleProblem('', '', 'x'), 'string');
 eq('refused: all-* patterns', ['*', '**', '*****'].map(p => typeof titleRuleProblem('', p, '')),
     ['string', 'string', 'string']);
 eq('allowed: * with something else', [titleRuleProblem('', '*?*', ''), titleRuleProblem('', ' ', '')], [null, null]);
-eq('refused: pattern or label over 200 characters',
-    [typeof titleRuleProblem('', long, ''), typeof titleRuleProblem('', 'a', long)], ['string', 'string']);
+eq('refused: pattern over 60, label over 200 characters',
+    [typeof titleRuleProblem('', 'x'.repeat(61), ''), typeof titleRuleProblem('', 'a', long)], ['string', 'string']);
 eq('allowed: exactly 200 characters, counted in code points',
-    [titleRuleProblem('', 'x'.repeat(200), '😀'.repeat(200)), typeof titleRuleProblem('', '😀'.repeat(201), '')],
-    [null, 'string']);
+    [titleRuleProblem('', '😀'.repeat(60), '😀'.repeat(200)), typeof titleRuleProblem('', '😀'.repeat(61), ''),
+        typeof titleRuleProblem('', 'a', '😀'.repeat(201))],
+    [null, 'string', 'string']);
 eq('refused: non-string fields', typeof titleRuleProblem('', 5, ''), 'string');
 
 // --- compileTitleRules (the model side: hand-edited dconf) ------------------------------
@@ -152,7 +157,7 @@ eq('compile: valid rules leave other titles alone', blank([['', '*q*', 'Q'], ['x
 eq('compile: no rules leave titles alone', [blank([]), blank(undefined)], ['Terminal', 'Terminal']);
 eq('fail closed: an empty pattern', blank([['', '*z*', 'Z'], ['', '', 'empty']]), '');
 eq('fail closed: an all-* pattern', blank([['', '**', 'all']]), '');
-eq('fail closed: a pattern or a label over 200 characters', [blank([['', long, '']]), blank([['', 'q', long]])],
+eq('fail closed: a pattern over 60 or a label over 200 characters', [blank([['', long, '']]), blank([['', 'q', long]])],
     ['', '']);
 eq('fail closed: not (app, pattern, label)', [blank([['x', 'y']]), blank(['junk']), blank([['', 5, '']]),
     blank([['', 'y', 'z', 'w']])], ['', '', '', '']);
