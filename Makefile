@@ -27,6 +27,7 @@ test:
 	gjs -m tests/window_title_review_pattern_test.js
 	gjs -m tests/window_title_review_log_test.js
 	gjs -m tests/window_digit_filter_test.js
+	gjs -m tests/window_counter_settle_test.js
 	gjs -m tests/window_tracker_test.js
 	mkdir -p $(TEST_RUNTIME)/schemas
 	glib-compile-schemas --strict --targetdir=$(TEST_RUNTIME)/schemas $(SRC)/schemas

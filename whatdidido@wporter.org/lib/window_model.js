@@ -334,6 +334,8 @@ export function formatTitleRules(list) {
 const DIGIT_RUNS = /([0-9]+)/;
 // The longest digit run whose change still counts as a counter.
 export const COUNTER_MAX_DIGITS = 3;
+// A counter-only change is sent once the title has stayed this long.
+export const COUNTER_SETTLE_MS = 15000;
 
 // Whether title repeats last: equal, or a counter tick that changes only
 // digit runs of at most COUNTER_MAX_DIGITS on both sides ("30 FPS" -> "31
