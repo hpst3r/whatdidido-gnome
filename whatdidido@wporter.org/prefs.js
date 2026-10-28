@@ -86,9 +86,9 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         ids.push(settings.connect('changed::window-title-excluded-apps', syncExcluded));
         syncExcluded();
         const digits = new Adw.SwitchRow({
-            title: 'Ignore digit-only title changes',
-            subtitle: 'A title that only changes a number of up to 3 digits (an FPS counter) is not sent again; ' +
-                'longer numbers such as ticket numbers always are',
+            title: 'Delay digit-only title changes',
+            subtitle: 'A title that only changes a number of up to 3 digits (an FPS counter, Issue 123 → 124) is ' +
+                'sent once it has stayed the same for 15 seconds; longer numbers such as ticket numbers at once',
         });
         settings.bind('window-title-ignore-digit-changes', digits, 'active', Gio.SettingsBindFlags.DEFAULT);
         activity.add(digits);

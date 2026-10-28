@@ -1,9 +1,11 @@
 // Run: gjs -m tests/window_digit_filter_test.js
 // Digit-only title changes (whatdidido TIME_ACCOUNTING.md "Later": ignore
 // digit-only title changes, window-title-ignore-digit-changes): an ordinary
-// title-change send is skipped when, against the last payload sent, only
-// short digit runs changed (the server's counter rule), so the first title
-// stands. Focus changes, re-sends, retries and paused reports always send.
+// title-change send is held when, against the last payload sent, only short
+// digit runs changed (the server's counter rule), so while a counter keeps
+// ticking the first title stands (tests/window_counter_settle_test.js: a
+// held title is sent once it settles for 15 s). Focus changes, re-sends,
+// retries and paused reports always send.
 // Title rules apply first, so a relabeled title's ticks never send.
 import System from 'system';
 
