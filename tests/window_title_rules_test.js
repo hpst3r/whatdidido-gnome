@@ -168,10 +168,10 @@ eq('fail closed: more than 100 rules', [
 ], ['Terminal', '']);
 eq('fail closed: the valid rules\' labels are not used either',
     applyTitleRules('secret', '', '', compileTitleRules([['', 'secret', 'S'], ['', '', '']]).rules), '');
-let compiled = compileTitleRules([['', '*a*', 'A'], ['', '', 'empty'], ['', '*', 'all'], ['', long, ''],
+let compiled = compileTitleRules([['', '*a*', 'A'], ['', '', 'LBL2'], ['', '*', 'all'], ['', long, ''],
     ['x', 'y'], 'junk', ['', '*b*', 'B']]);
 eq('compile: one problem per bad entry, numbered from 1, never the entry text',
-    [compiled.problems.length, compiled.problems.every(m => !m.includes(long) && !m.includes('empty')),
+    [compiled.problems.length, compiled.problems.every(m => !m.includes(long) && !m.includes('LBL2')),
         compiled.problems.map(m => m.match(/^rule (\d+):/)?.[1])],
     [5, true, ['2', '3', '4', '5', '6']]);
 compiled = compileTitleRules(Array.from({length: TITLE_RULES_MAX + 5}, (_, i) => ['', `t${i}`, `L${i}`]));
@@ -186,7 +186,6 @@ eq('entry problem: the 101st entry', [titleEntryProblem(['', 'a', ''], TITLE_RUL
 const rules = compileTitleRules([
     ['org.mozilla.firefox', '*Discord*', 'Discord (private)'],
     ['', '*Discord*', ''],
-    ['Slack', '*', 'never: refused'],
     ['slack', '*DM*', 'Slack DM'],
     ['', 'Inbox (*)*', 'Mail'],
 ]).rules;

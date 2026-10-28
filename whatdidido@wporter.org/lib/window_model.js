@@ -112,96 +112,113 @@ export function isExcluded(appId, excluded) {
 // Patterns are case-insensitive globs: '*' any run, '?' one character,
 // everything else literal (no escapes, no [classes]). No RegExp is ever built
 // from them: the matcher runs in the shell's main loop.
+// Fail closed: while the setting holds any entry that can't be used, every
+// title is sent empty, and so is a title too long to match
+// (TITLE_RULE_MATCH_MAX) while any rule is set.
 export const TITLE_RULES_MAX = 100;
-export const TITLE_RULE_FIELD_MAX = 200;
-export const TITLE_RULE_MATCH_MAX = 1024;  // stub (RED)
-export const TITLE_RULE_PATTERN_MAX = 200;  // stub (RED)
-export function titleEntryProblem() {
-    return null;
-}
-export function parseTitleRule() {
-    return {rule: [], problem: null};
-}
+export const TITLE_RULE_FIELD_MAX = 200;    // labels
+// Patterns: at most 63 tokens keep the matcher's state in two 32-bit words.
+// With TITLE_RULE_MATCH_MAX, 100 such rules on one title stay well inside a
+// 16 ms frame (tests/window_title_rules_test.js measures it).
+export const TITLE_RULE_PATTERN_MAX = 60;
+export const TITLE_RULE_MATCH_MAX = 4096;   // code points
 
+// Per code point, so '?' is one character whatever it folds to ('ß' stays
+// 'ß': it doesn't match 'SS').
 const fold = ch => ch.toLowerCase();
 
-// A bit-parallel NFA (Shift-And) over the pattern's positions: bit j is "the
-// first j pattern characters matched", a '*' bit also stays set on any
-// character and sets the next bit without consuming one. One pass over the
-// title, O(title × pattern / 32), never backtracking.
-function compileGlob(pattern) {
+function tokenize(pattern) {
     const tokens = [];
     for (const ch of pattern) {
         if (ch !== '*' || tokens.at(-1) !== '*')
             tokens.push(ch === '*' || ch === '?' ? ch : fold(ch));
     }
-    const size = tokens.length;
-    const words = (size >> 5) + 1;  // bits 0..size; bit size = accept
-    const star = new Uint32Array(words), any = new Uint32Array(words);
+    return tokens;
+}
+
+// [low, high] word of bit j (j <= 63).
+const bit = j => (j < 32 ? [1 << j, 0] : [0, 1 << (j - 32)]);
+
+// A bit-parallel NFA (Shift-And) over the pattern's positions: bit j is "the
+// first j pattern tokens matched", a '*' bit also stays set on any character
+// and sets the next bit without consuming one. ids: folded character -> a
+// number shared by the rule set (0: in no pattern). The state is two 32-bit
+// words, so at most 63 tokens.
+function compileGlob(tokens, ids) {
+    let starLo = 0, starHi = 0, anyLo = 0, anyHi = 0;
     tokens.forEach((t, j) => {
-        if (t === '*')
-            star[j >> 5] |= 1 << (j & 31);
-        else if (t === '?')
-            any[j >> 5] |= 1 << (j & 31);
+        const [lo, hi] = bit(j);
+        if (t === '*') {
+            starLo |= lo;
+            starHi |= hi;
+        } else if (t === '?') {
+            anyLo |= lo;
+            anyHi |= hi;
+        }
     });
-    const masks = new Map();  // folded character -> the bits it advances
+    // row[id]: the character's mask pair in masks (row 0: any other character).
+    const row = new Uint8Array(ids.size + 1), masks = [anyLo, anyHi];
     tokens.forEach((t, j) => {
         if (t === '*' || t === '?')
             return;
-        if (!masks.has(t))
-            masks.set(t, Uint32Array.from(any));
-        masks.get(t)[j >> 5] |= 1 << (j & 31);
-    });
-    return {size, words, star, any, masks, tailStar: tokens.at(-1) === '*'};
-}
-
-// A set '*' bit also sets the next one (never a '*': runs are collapsed).
-function starClosure(state, star) {
-    let carry = 0;
-    for (let w = 0; w < state.length; w++) {
-        const s = state[w] & star[w];
-        state[w] |= (s << 1) | carry;
-        carry = s >>> 31;
-    }
-}
-
-// chars: the title's folded code points.
-function globMatches(glob, chars) {
-    const {size, words, star, any, masks, tailStar} = glob;
-    const acceptWord = size >> 5, acceptBit = size & 31;
-    let state = new Uint32Array(words), next = new Uint32Array(words);
-    state[0] = 1;
-    starClosure(state, star);
-    for (const ch of chars) {
-        // A trailing '*' keeps an accepted title accepted.
-        if (tailStar && (state[acceptWord] >>> acceptBit) & 1)
-            return true;
-        const mask = masks.get(ch) ?? any;
-        let carry = 0, alive = 0;
-        for (let w = 0; w < words; w++) {
-            const s = state[w], advance = s & mask[w];
-            next[w] = (advance << 1) | carry | (s & star[w]);
-            carry = advance >>> 31;
-            alive |= next[w];
+        const id = ids.get(t);
+        if (!row[id]) {
+            row[id] = masks.length / 2;
+            masks.push(anyLo, anyHi);
         }
-        if (!alive)
+        const [lo, hi] = bit(j);
+        masks[2 * row[id]] |= lo;
+        masks[2 * row[id] + 1] |= hi;
+    });
+    const [acceptLo, acceptHi] = bit(tokens.length);
+    return {starLo, starHi, acceptLo, acceptHi, row, masks: Int32Array.from(masks), tailStar: tokens.at(-1) === '*'};
+}
+
+// title: the title's character ids. One pass, never backtracking.
+function globMatches(glob, title) {
+    const {starLo, starHi, acceptLo, acceptHi, row, masks, tailStar} = glob;
+    let lo = 1 | ((starLo & 1) << 1), hi = 0;
+    for (let i = 0; i < title.length; i++) {
+        // A trailing '*' keeps an accepted title accepted.
+        if (tailStar && ((lo & acceptLo) | (hi & acceptHi)))
+            return true;
+        const k = row[title[i]] * 2;
+        const advLo = lo & masks[k], advHi = hi & masks[k + 1];
+        let nextLo = (advLo << 1) | (lo & starLo);
+        let nextHi = (advHi << 1) | (advLo >>> 31) | (hi & starHi);
+        // A set '*' bit also sets the next one (never a '*': runs are collapsed).
+        const closeLo = nextLo & starLo;
+        nextHi |= ((nextHi & starHi) << 1) | (closeLo >>> 31);
+        nextLo |= closeLo << 1;
+        if (!(nextLo | nextHi))
             return false;
-        starClosure(next, star);
-        const swap = state;
-        state = next;
-        next = swap;
+        lo = nextLo;
+        hi = nextHi;
     }
-    return ((state[acceptWord] >>> acceptBit) & 1) === 1;
+    return ((lo & acceptLo) | (hi & acceptHi)) !== 0;
 }
 
 // Rules match the title as it would be sent (control characters as
 // spaces), but whole: before sanitizeWindow() shortens it.
-function foldedTitle(title) {
-    return Array.from(String(title).toWellFormed().replace(CONTROL_RE, ' '), fold);
+function titleIds(title, ids) {
+    return Int32Array.from(title.toWellFormed().replace(CONTROL_RE, ' '), ch => ids.get(fold(ch)) ?? 0);
 }
 
+function idsOf(tokenLists) {
+    const ids = new Map();
+    for (const tokens of tokenLists) {
+        for (const t of tokens) {
+            if (t !== '*' && t !== '?' && !ids.has(t))
+                ids.set(t, ids.size + 1);
+        }
+    }
+    return ids;
+}
+
+// One pattern (up to 63 tokens) against one text, for tests.
 export function globMatch(pattern, text) {
-    return globMatches(compileGlob(String(pattern)), foldedTitle(text));
+    const tokens = tokenize(String(pattern)), ids = idsOf([tokens]);
+    return globMatches(compileGlob(tokens, ids), titleIds(String(text), ids));
 }
 
 // Why a rule can't be used (shown in Settings, logged by the extension), or
@@ -213,30 +230,49 @@ export function titleRuleProblem(app, pattern, label) {
         return 'The pattern is empty';
     if (/^\*+$/.test(pattern))
         return 'A pattern of only * would hide every title (turn off Record active window instead)';
-    if ([...pattern].length > TITLE_RULE_FIELD_MAX)
-        return `The pattern is longer than ${TITLE_RULE_FIELD_MAX} characters`;
+    if ([...pattern].length > TITLE_RULE_PATTERN_MAX)
+        return `The pattern is longer than ${TITLE_RULE_PATTERN_MAX} characters`;
     if ([...label].length > TITLE_RULE_FIELD_MAX)
         return `The label is longer than ${TITLE_RULE_FIELD_MAX} characters`;
     return null;
 }
 
-// The settings value as matchers. Entries Settings would refuse (possible
-// through dconf) and entries past TITLE_RULES_MAX are left out; problems
-// name them by number, never by their text.
+// The problem of the setting's entry at index (from 0), or null.
+export function titleEntryProblem(entry, index) {
+    if (index >= TITLE_RULES_MAX)
+        return `At most ${TITLE_RULES_MAX} rules are allowed`;
+    if (!Array.isArray(entry) || entry.length !== 3)
+        return 'Not an (app, pattern, label) entry';
+    return titleRuleProblem(...entry);
+}
+
+// No rules: titles are sent as they are.
+const NO_RULES = {list: [], ids: new Map(), closed: false};
+
+// The settings value as {rules, problems}. rules is for applyTitleRules();
+// with any problem (an entry Settings would refuse, possible through dconf,
+// or too many entries) it empties every title. problems name entries by
+// number, never by their text.
 export function compileTitleRules(entries) {
-    const list = Array.isArray(entries) ? entries : [];
-    const rules = [], problems = [];
-    list.slice(0, TITLE_RULES_MAX).forEach((entry, i) => {
-        const problem = Array.isArray(entry) && entry.length === 3
-            ? titleRuleProblem(...entry) : 'Not an (app, pattern, label) entry';
-        if (problem)
-            problems.push(`title rule ${i + 1} ignored: ${problem}`);
-        else
-            rules.push({app: entry[0].trim(), glob: compileGlob(entry[1]), label: entry[2]});
-    });
-    if (list.length > TITLE_RULES_MAX)
-        problems.push(`only the first ${TITLE_RULES_MAX} of ${list.length} title rules are used`);
-    return {rules, problems};
+    if (entries === undefined)
+        return {rules: NO_RULES, problems: []};
+    const problems = [];
+    if (!Array.isArray(entries)) {
+        problems.push('not a list of (app, pattern, label) entries');
+    } else {
+        if (entries.length > TITLE_RULES_MAX)
+            problems.push(`${entries.length} rules, more than ${TITLE_RULES_MAX}`);
+        entries.slice(0, TITLE_RULES_MAX).forEach((entry, i) => {
+            const problem = titleEntryProblem(entry, i);
+            if (problem)
+                problems.push(`rule ${i + 1}: ${problem}`);
+        });
+    }
+    if (problems.length)
+        return {rules: {list: [], ids: new Map(), closed: true}, problems};
+    const tokens = entries.map(([, pattern]) => tokenize(pattern)), ids = idsOf(tokens);
+    const list = entries.map(([app, , label], i) => ({app: app.trim(), glob: compileGlob(tokens[i], ids), label}));
+    return {rules: {list, ids, closed: false}, problems};
 }
 
 function ruleApplies(app, appId, wmClass) {
@@ -246,32 +282,46 @@ function ruleApplies(app, appId, wmClass) {
         (!!wmClass && app.toLowerCase() === wmClass.trim().toLowerCase());
 }
 
-// The label of the first matching compileTitleRules() rule, else the title.
-export function applyTitleRules(title, appId, wmClass, rules) {
-    if (!rules?.length)
+function longerThan(text, max) {
+    if (text.length <= max)
+        return false;
+    let n = 0;
+    for (const _ of text) {
+        if (++n > max)
+            return true;
+    }
+    return false;
+}
+
+// The label of the first matching rule (compileTitleRules().rules), else
+// the title; empty while the rules fail closed, or for a title over
+// TITLE_RULE_MATCH_MAX characters while any rule is set.
+export function applyTitleRules(title, appId, wmClass, rules = NO_RULES) {
+    if (!rules.closed && !rules.list.length)
         return title;
-    const chars = foldedTitle(title);
-    for (const rule of rules) {
-        if (ruleApplies(rule.app, appId, wmClass) && globMatches(rule.glob, chars))
+    if (rules.closed || longerThan(title, TITLE_RULE_MATCH_MAX))
+        return '';
+    const ids = titleIds(title, rules.ids);
+    for (const rule of rules.list) {
+        if (ruleApplies(rule.app, appId, wmClass) && globMatches(rule.glob, ids))
             return rule.label;
     }
     return title;
 }
 
-// Settings rows ({app, pattern, label}) -> the settings value, and one error
-// (or null) per row. Refused rows are not saved.
-export function parseTitleRules(rows) {
-    const rules = [], errors = [];
-    for (const row of rows) {
-        const app = String(row?.app ?? '').trim(), pattern = String(row?.pattern ?? ''),
-            label = String(row?.label ?? '');
-        const problem = rules.length >= TITLE_RULES_MAX
-            ? `At most ${TITLE_RULES_MAX} rules are used` : titleRuleProblem(app, pattern, label);
-        errors.push(problem);
-        if (!problem)
-            rules.push([app, pattern, label]);
-    }
-    return {rules, errors};
+// A Settings row ({app, pattern, label}) at index -> {rule: the entry to
+// save, problem: why it can't be saved, or null}.
+export function parseTitleRule(row, index) {
+    const rule = [String(row?.app ?? '').trim(), String(row?.pattern ?? ''), String(row?.label ?? '')];
+    return {rule, problem: titleEntryProblem(rule, index)};
+}
+
+// 32-bit FNV-1a of a string's UTF-16 units: a short log-once key.
+function hash(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++)
+        h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+    return (h >>> 0).toString(16);
 }
 
 export function formatTitleRules(list) {
@@ -371,9 +421,9 @@ export function rfc3339(ms) {
 // only then are monitors (when non-empty; none means "unknown") and
 // changed_at (ms since the epoch, when known) added. seen: monitor sets
 // already seen in this burst (AT_REST_GUARD.md A2.3), added to the window's.
-// rules: compileTitleRules() rules, applied to the whole raw title (an
+// rules: compileTitleRules().rules, applied to the whole raw title (an
 // excluded app's title is empty whatever the rules).
-export function windowPayload(raw, excluded = [], {geometry = false, changedAt = null, seen = [], rules = []} = {}) {
+export function windowPayload(raw, excluded = [], {geometry = false, changedAt = null, seen = [], rules} = {}) {
     if (!raw)
         return {focus: 'none'};
     const str = v => (typeof v === 'string' ? v : '');
@@ -513,7 +563,7 @@ export class WindowReporter {
             _retryMinMs: retryMinMs, _retryMaxMs: retryMaxMs});
         this._enabled = !!enabled;
         this._excluded = excluded;
-        this._rules = [];           // compileTitleRules() rules
+        this._rules = null;         // compileTitleRules().rules
         this._ignoreDigits = !!ignoreDigitChanges;
         this._eligible = false;
         this._unavailable = false;
@@ -629,11 +679,16 @@ export class WindowReporter {
         this._clear('_retryTimer');
     }
 
+    // Logged once per distinct bad setting (keyed by a hash of it), naming
+    // the entries by number only.
     _setRules(entries) {
         const {rules, problems} = compileTitleRules(entries);
         this._rules = rules;
-        for (const problem of problems)
-            this._logOnce(`whatdidido: ${problem}`);
+        if (!problems.length)
+            return;
+        const shown = problems.slice(0, 3).join('; ') + (problems.length > 3 ? `; ${problems.length - 3} more` : '');
+        this._logOnce(`whatdidido: window-title-rules can't be used (${shown}): every window title is sent empty ` +
+            'until it is fixed', `title-rules ${hash(JSON.stringify(entries) ?? '')}`);
     }
 
     _armSettle() {
@@ -726,11 +781,11 @@ export class WindowReporter {
         this._post(payload, burst);
     }
 
-    _logOnce(msg) {
-        if (this._logged.has(msg))
+    _logOnce(msg, key = msg) {
+        if (this._logged.has(key))
             return;
         this._log(msg);
-        this._logged.add(msg);
+        this._logged.add(key);
         if (this._logged.size > LOGGED_MAX)
             this._logged.delete(this._logged.values().next().value);
     }
