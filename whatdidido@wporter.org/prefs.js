@@ -126,7 +126,7 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         const appGroup = new Adw.PreferencesGroup({
             title: 'App server',
             description: 'Leave empty to find it automatically from the work session. ' +
-                'Otherwise only a local address works: http://127.0.0.1:<port>.',
+                'Otherwise only a local address works: http://127.0.0.1:&lt;port&gt;.',
         });
         page.add(appGroup);
         const appUrl = new Adw.EntryRow({title: 'App server URL', show_apply_button: true});

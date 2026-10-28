@@ -35,7 +35,7 @@
     <key name="report-active-window" type="b">
       <default>true</default>
       <summary>Report the focused window to the work session</summary>
-      <description>Sends the focused window's app id, app name, WM class and title to the loopback work-session server, only while it is recording and offers window activity (--window-activity). Never while paused.</description>
+      <description>Sends the focused window's app id, app name, WM class and title to the loopback work-session server, only while the server offers window activity (--window-activity): while it is recording, and while it is paused to a session whose at-rest guard takes window reports (not counted as active time).</description>
     </key>
     <key name="window-title-excluded-apps" type="as">
       <default>[]</default>
