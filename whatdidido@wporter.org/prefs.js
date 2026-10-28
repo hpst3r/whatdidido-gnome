@@ -6,7 +6,7 @@ import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import {
-    TITLE_RULES_MAX, formatExcludedApps, formatTitleRules, parseExcludedApps, parseTitleRules,
+    TITLE_RULES_MAX, formatExcludedApps, formatTitleRules, parseExcludedApps, parseTitleRule, titleEntryProblem,
 } from './lib/window_model.js';
 
 export default class WhatdididoPrefs extends ExtensionPreferences {
@@ -62,8 +62,9 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
 
         const activity = new Adw.PreferencesGroup({
             title: 'Active window',
-            description: 'Only sent to the local work session, only while it is recording ' +
-                '(never while paused), and only if the server offers it (--window-activity).',
+            description: 'Only sent to the local work session, only while it is recording (or paused, to a ' +
+                'session whose at-rest guard takes window reports; not counted as active time), and only if ' +
+                'the server offers it (--window-activity).',
         });
         page.add(activity);
         const report = new Adw.SwitchRow({
@@ -92,7 +93,7 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         settings.bind('window-title-ignore-digit-changes', digits, 'active', Gio.SettingsBindFlags.DEFAULT);
         activity.add(digits);
 
-        page.add(this._titleRules(settings, ids));
+        page.add(this._titleRules(settings, ids, window));
 
         const reminders = new Adw.PreferencesGroup({
             title: 'Reminders',
@@ -149,93 +150,129 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         window.add(page);
     }
 
-    // window-title-rules: one expander row per rule. Every edit re-validates
-    // (parseTitleRules) and saves the valid rules; a refused row shows why
-    // and is not saved.
-    _titleRules(settings, ids) {
+    // window-title-rules: one expander row per rule. A row is saved on Enter
+    // or when focus leaves one of its entries, and only when the whole row
+    // is valid (parseTitleRule); until then the setting keeps the row's last
+    // saved value, so editing a rule never drops it. Removing a row saves at
+    // once; a new row is saved only once it is valid and committed. Closing
+    // the window commits every valid row.
+    _titleRules(settings, ids, window) {
         const group = new Adw.PreferencesGroup({
             title: 'Window title rules',
             description: 'The first rule that matches replaces the window title before it is sent (an empty ' +
                 'label sends an empty title). Pattern: the whole title, case-insensitive, * for any text, ? for ' +
-                'one character, e.g. *Discord*. App: empty for every app, or an app id or WM class. Rules only ' +
-                'change what is sent as the window title, not screenshots.',
+                'one character, e.g. *Discord*. App: empty for every app, or an app id or WM class. Press Enter ' +
+                'to save a rule. While a rule is invalid, or a title is longer than 4096 characters, every title ' +
+                'is sent empty. Rules only change what is sent as the window title, not screenshots.',
         });
         const add = new Gtk.Button({icon_name: 'list-add-symbolic', tooltip_text: 'Add rule', valign: Gtk.Align.CENTER});
         add.add_css_class('flat');
         group.set_header_suffix(add);
 
+        // r.saved: the row's entry in the setting, or null (a new row).
         let rows = [];
-        let saved = null;  // the value this window last loaded or wrote, as JSON
+        let written = null;  // the value this window last loaded or wrote, as JSON
         const read = () => settings.get_value('window-title-rules').deep_unpack();
-        // Shows each row's problem; returns the rules to save.
-        const validate = () => {
-            const {rules, errors} = parseTitleRules(rows.map(r => ({
-                app: r.app.text, pattern: r.pattern.text, label: r.label.text,
-            })));
+        const fields = r => ({app: r.app.text, pattern: r.pattern.text, label: r.label.text});
+        const write = () => {
+            const value = rows.filter(r => r.saved).map(r => r.saved);
+            written = JSON.stringify(value);
+            if (written !== JSON.stringify(read()))
+                settings.set_value('window-title-rules', new GLib.Variant('a(sss)', value));
+        };
+        // Each row's state: its problem as typed, whether it differs from
+        // what is saved, and whether the saved entry itself can't be used
+        // (from dconf: then every title is sent empty).
+        const show = () => {
+            let stored = 0;
             rows.forEach((r, i) => {
+                const {rule, problem} = parseTitleRule(fields(r), i);
+                const broken = r.saved ? titleEntryProblem(r.saved, stored++) !== null : false;
+                const dirty = JSON.stringify(rule) !== JSON.stringify(r.saved);
+                const summary = `${rule[0] || 'Any app'} → ${rule[2] || 'empty title'}`;
+                let text;
+                if (problem)
+                    text = `Not saved: ${problem}.${r.saved && !broken ? ' The saved rule stays in use.' : ''}`;
+                else
+                    text = dirty ? `${summary} (press Enter to save)` : summary;
+                if (broken)
+                    text += ' Every window title is sent empty until this rule is fixed or removed.';
                 r.expander.title = r.pattern.text || 'New rule';
-                r.expander.subtitle = errors[i] ? `Not saved: ${errors[i]}`
-                    : `${r.app.text.trim() || 'Any app'} → ${r.label.text ? r.label.text : 'empty title'}`;
+                r.expander.subtitle = text;
                 for (const entry of [r.pattern, r.label])
                     entry.remove_css_class('error');
-                if (errors[i])
-                    (/label/.test(errors[i]) ? r.label : r.pattern).add_css_class('error');
+                if (problem)
+                    (/label/.test(problem) ? r.label : r.pattern).add_css_class('error');
             });
             add.sensitive = rows.length < TITLE_RULES_MAX;
-            return rules;
         };
-        const save = () => {
-            const rules = validate();
-            saved = JSON.stringify(rules);
-            if (saved !== JSON.stringify(read()))
-                settings.set_value('window-title-rules', new GLib.Variant('a(sss)', rules));
+        const commit = r => {
+            const i = rows.indexOf(r);
+            if (i < 0)
+                return;
+            const {rule, problem} = parseTitleRule(fields(r), i);
+            if (!problem && JSON.stringify(rule) !== JSON.stringify(r.saved)) {
+                r.saved = rule;
+                write();
+            }
+            show();
         };
-        const addRow = ({app, pattern, label}, expanded) => {
-            const expander = new Adw.ExpanderRow({use_markup: false, expanded});
+        const addRow = ({app, pattern, label}, saved) => {
+            const expander = new Adw.ExpanderRow({use_markup: false, expanded: !saved});
+            const r = {expander, saved};
             const entry = (title, text) => {
                 const row = new Adw.EntryRow({title, text, use_markup: false});
-                row.connect('changed', save);
+                row.connect('changed', show);
+                row.connect('entry-activated', () => commit(r));
+                const focus = new Gtk.EventControllerFocus();
+                focus.connect('leave', () => commit(r));
+                row.add_controller(focus);
                 expander.add_row(row);
                 return row;
             };
-            const r = {
-                expander,
-                app: entry('App id or WM class (empty = every app)', app),
-                pattern: entry('Pattern (* any text, ? one character)', pattern),
-                label: entry('Label (empty = empty title)', label),
-            };
+            r.app = entry('App id or WM class (empty = every app)', app);
+            r.pattern = entry('Pattern (* any text, ? one character)', pattern);
+            r.label = entry('Label (empty = empty title)', label);
             const remove = new Gtk.Button({icon_name: 'user-trash-symbolic', tooltip_text: 'Remove rule',
                 valign: Gtk.Align.CENTER});
             remove.add_css_class('flat');
             remove.connect('clicked', () => {
                 rows = rows.filter(x => x !== r);
                 group.remove(expander);
-                save();
+                write();
+                show();
             });
             expander.add_suffix(remove);
             group.add(expander);
             rows.push(r);
+            return r;
         };
         // Rebuild from the setting, unless the change is this window's own
-        // write. Loading never writes: entries refused here (possible
-        // through dconf) stay until the rules are edited.
+        // write. Loading never writes: entries that can't be used (possible
+        // through dconf) stay, shown as such, until fixed or removed.
         const load = () => {
             const value = read();
-            if (JSON.stringify(value) === saved)
+            if (JSON.stringify(value) === written)
                 return;
             for (const r of rows)
                 group.remove(r.expander);
             rows = [];
-            for (const rule of formatTitleRules(value))
-                addRow(rule, false);
-            saved = JSON.stringify(value);
-            validate();
+            for (const [i, rule] of formatTitleRules(value).entries())
+                addRow(rule, value[i]);
+            written = JSON.stringify(value);
+            show();
         };
         add.connect('clicked', () => {
-            addRow({app: '', pattern: '', label: ''}, true);
-            save();
+            addRow({app: '', pattern: '', label: ''}, null).pattern.grab_focus();
+            show();
         });
         ids.push(settings.connect('changed::window-title-rules', load));
+        // Before the window's own close-request handler disconnects ids.
+        window.connect('close-request', () => {
+            for (const r of [...rows])
+                commit(r);
+            return false;
+        });
         load();
         return group;
     }
