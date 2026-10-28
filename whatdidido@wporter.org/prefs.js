@@ -1,10 +1,13 @@
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-import {formatExcludedApps, parseExcludedApps} from './lib/window_model.js';
+import {
+    TITLE_RULES_MAX, formatExcludedApps, formatTitleRules, parseExcludedApps, parseTitleRules,
+} from './lib/window_model.js';
 
 export default class WhatdididoPrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -81,6 +84,15 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         };
         ids.push(settings.connect('changed::window-title-excluded-apps', syncExcluded));
         syncExcluded();
+        const digits = new Adw.SwitchRow({
+            title: 'Ignore digit-only title changes',
+            subtitle: 'A title that only changes a number of up to 3 digits (an FPS counter) is not sent again; ' +
+                'longer numbers such as ticket numbers always are',
+        });
+        settings.bind('window-title-ignore-digit-changes', digits, 'active', Gio.SettingsBindFlags.DEFAULT);
+        activity.add(digits);
+
+        page.add(this._titleRules(settings, ids));
 
         const reminders = new Adw.PreferencesGroup({
             title: 'Reminders',
@@ -135,5 +147,96 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         bar.add(showMic);
 
         window.add(page);
+    }
+
+    // window-title-rules: one expander row per rule. Every edit re-validates
+    // (parseTitleRules) and saves the valid rules; a refused row shows why
+    // and is not saved.
+    _titleRules(settings, ids) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Window title rules',
+            description: 'The first rule that matches replaces the window title before it is sent (an empty ' +
+                'label sends an empty title). Pattern: the whole title, case-insensitive, * for any text, ? for ' +
+                'one character, e.g. *Discord*. App: empty for every app, or an app id or WM class. Rules only ' +
+                'change what is sent as the window title, not screenshots.',
+        });
+        const add = new Gtk.Button({icon_name: 'list-add-symbolic', tooltip_text: 'Add rule', valign: Gtk.Align.CENTER});
+        add.add_css_class('flat');
+        group.set_header_suffix(add);
+
+        let rows = [];
+        let saved = null;  // the value this window last loaded or wrote, as JSON
+        const read = () => settings.get_value('window-title-rules').deep_unpack();
+        // Shows each row's problem; returns the rules to save.
+        const validate = () => {
+            const {rules, errors} = parseTitleRules(rows.map(r => ({
+                app: r.app.text, pattern: r.pattern.text, label: r.label.text,
+            })));
+            rows.forEach((r, i) => {
+                r.expander.title = r.pattern.text || 'New rule';
+                r.expander.subtitle = errors[i] ? `Not saved: ${errors[i]}`
+                    : `${r.app.text.trim() || 'Any app'} → ${r.label.text ? r.label.text : 'empty title'}`;
+                for (const entry of [r.pattern, r.label])
+                    entry.remove_css_class('error');
+                if (errors[i])
+                    (/label/.test(errors[i]) ? r.label : r.pattern).add_css_class('error');
+            });
+            add.sensitive = rows.length < TITLE_RULES_MAX;
+            return rules;
+        };
+        const save = () => {
+            const rules = validate();
+            saved = JSON.stringify(rules);
+            if (saved !== JSON.stringify(read()))
+                settings.set_value('window-title-rules', new GLib.Variant('a(sss)', rules));
+        };
+        const addRow = ({app, pattern, label}, expanded) => {
+            const expander = new Adw.ExpanderRow({use_markup: false, expanded});
+            const entry = (title, text) => {
+                const row = new Adw.EntryRow({title, text, use_markup: false});
+                row.connect('changed', save);
+                expander.add_row(row);
+                return row;
+            };
+            const r = {
+                expander,
+                app: entry('App id or WM class (empty = every app)', app),
+                pattern: entry('Pattern (* any text, ? one character)', pattern),
+                label: entry('Label (empty = empty title)', label),
+            };
+            const remove = new Gtk.Button({icon_name: 'user-trash-symbolic', tooltip_text: 'Remove rule',
+                valign: Gtk.Align.CENTER});
+            remove.add_css_class('flat');
+            remove.connect('clicked', () => {
+                rows = rows.filter(x => x !== r);
+                group.remove(expander);
+                save();
+            });
+            expander.add_suffix(remove);
+            group.add(expander);
+            rows.push(r);
+        };
+        // Rebuild from the setting, unless the change is this window's own
+        // write. Loading never writes: entries refused here (possible
+        // through dconf) stay until the rules are edited.
+        const load = () => {
+            const value = read();
+            if (JSON.stringify(value) === saved)
+                return;
+            for (const r of rows)
+                group.remove(r.expander);
+            rows = [];
+            for (const rule of formatTitleRules(value))
+                addRow(rule, false);
+            saved = JSON.stringify(value);
+            validate();
+        };
+        add.connect('clicked', () => {
+            addRow({app: '', pattern: '', label: ''}, true);
+            save();
+        });
+        ids.push(settings.connect('changed::window-title-rules', load));
+        load();
+        return group;
     }
 }
