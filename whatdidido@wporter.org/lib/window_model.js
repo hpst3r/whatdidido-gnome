@@ -112,11 +112,12 @@ export function isExcluded(appId, excluded) {
 // Patterns are case-insensitive globs: '*' any run, '?' one character,
 // everything else literal (no escapes, no [classes]). No RegExp is ever built
 // from them: the matcher runs in the shell's main loop.
+// A pattern without a literal character (only '*' and '?') needs an app.
 // Fail closed: while the setting holds any entry that can't be used, every
 // title is sent empty, and so is a title too long to match
 // (TITLE_RULE_MATCH_MAX) while any rule is set.
 export const TITLE_RULES_MAX = 100;
-export const TITLE_RULE_FIELD_MAX = 200;    // labels
+export const TITLE_RULE_FIELD_MAX = 200;    // apps and labels
 // Patterns: at most 63 tokens keep the matcher's state in two 32-bit words.
 // With TITLE_RULE_MATCH_MAX, 100 such rules on one title stay well inside a
 // 16 ms frame (tests/window_title_rules_test.js measures it).
@@ -127,9 +128,13 @@ export const TITLE_RULE_MATCH_MAX = 4096;   // code points
 // 'ß': it doesn't match 'SS').
 const fold = ch => ch.toLowerCase();
 
+// Titles and patterns alike: control characters as spaces (as sent), lone
+// surrogates as U+FFFD.
+const matchText = text => text.toWellFormed().replace(CONTROL_RE, ' ');
+
 function tokenize(pattern) {
     const tokens = [];
-    for (const ch of pattern) {
+    for (const ch of matchText(pattern)) {
         if (ch !== '*' || tokens.at(-1) !== '*')
             tokens.push(ch === '*' || ch === '?' ? ch : fold(ch));
     }
@@ -201,7 +206,7 @@ function globMatches(glob, title) {
 // Rules match the title as it would be sent (control characters as
 // spaces), but whole: before sanitizeWindow() shortens it.
 function titleIds(title, ids) {
-    return Int32Array.from(title.toWellFormed().replace(CONTROL_RE, ' '), ch => ids.get(fold(ch)) ?? 0);
+    return Int32Array.from(matchText(title), ch => ids.get(fold(ch)) ?? 0);
 }
 
 function idsOf(tokenLists) {
@@ -228,8 +233,11 @@ export function titleRuleProblem(app, pattern, label) {
         return 'App, pattern and label must be text';
     if (pattern === '')
         return 'The pattern is empty';
-    if (/^\*+$/.test(pattern))
-        return 'A pattern of only * would hide every title (turn off Record active window instead)';
+    if (app.trim() === '' && /^[*?]+$/.test(pattern))
+        return 'Without an app, a pattern of only * and ? would replace every title (set an app, or turn off ' +
+            'Record active window instead)';
+    if ([...app].length > TITLE_RULE_FIELD_MAX)
+        return `The app is longer than ${TITLE_RULE_FIELD_MAX} characters`;
     if ([...pattern].length > TITLE_RULE_PATTERN_MAX)
         return `The pattern is longer than ${TITLE_RULE_PATTERN_MAX} characters`;
     if ([...label].length > TITLE_RULE_FIELD_MAX)
@@ -314,14 +322,6 @@ export function applyTitleRules(title, appId, wmClass, rules = NO_RULES) {
 export function parseTitleRule(row, index) {
     const rule = [String(row?.app ?? '').trim(), String(row?.pattern ?? ''), String(row?.label ?? '')];
     return {rule, problem: titleEntryProblem(rule, index)};
-}
-
-// 32-bit FNV-1a of a string's UTF-16 units: a short log-once key.
-function hash(text) {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < text.length; i++)
-        h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
-    return (h >>> 0).toString(16);
 }
 
 export function formatTitleRules(list) {
@@ -547,7 +547,8 @@ export function formatExcludedApps(list) {
 //   and retries the *current* focus with backoff RETRY_MIN_MS, doubling up
 //   to RETRY_MAX_MS, until a POST succeeds or the focus changes (a change
 //   goes through the settle timer instead).
-// - Errors are logged once per distinct message (the last LOGGED_MAX kept).
+// - Errors are logged once per distinct message (the last LOGGED_MAX kept),
+//   title rule problems whenever their list changes.
 //
 // deps: now() -> ms (monotonic); wallNow() -> ms since the epoch (for
 // changed_at); setTimer(ms, fn) -> id; clearTimer(id); readFocus() -> raw
@@ -564,6 +565,7 @@ export class WindowReporter {
         this._enabled = !!enabled;
         this._excluded = excluded;
         this._rules = null;         // compileTitleRules().rules
+        this._ruleProblems = '';    // compileTitleRules().problems last logged, joined
         this._ignoreDigits = !!ignoreDigitChanges;
         this._eligible = false;
         this._unavailable = false;
@@ -679,16 +681,20 @@ export class WindowReporter {
         this._clear('_retryTimer');
     }
 
-    // Logged once per distinct bad setting (keyed by a hash of it), naming
-    // the entries by number only.
+    // Logged when the list of problems changes (not through _logOnce: its
+    // set is shared with send errors), naming the entries by number only.
     _setRules(entries) {
         const {rules, problems} = compileTitleRules(entries);
         this._rules = rules;
+        const key = problems.join('\n');
+        if (key === this._ruleProblems)
+            return;
+        this._ruleProblems = key;
         if (!problems.length)
             return;
         const shown = problems.slice(0, 3).join('; ') + (problems.length > 3 ? `; ${problems.length - 3} more` : '');
-        this._logOnce(`whatdidido: window-title-rules can't be used (${shown}): every window title is sent empty ` +
-            'until it is fixed', `title-rules ${hash(JSON.stringify(entries) ?? '')}`);
+        this._log(`whatdidido: window-title-rules can't be used (${shown}): every window title is sent empty ` +
+            'until it is fixed');
     }
 
     _armSettle() {
