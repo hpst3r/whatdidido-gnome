@@ -161,7 +161,8 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
             title: 'Window title rules',
             description: 'The first rule that matches replaces the window title before it is sent (an empty ' +
                 'label sends an empty title). Pattern: the whole title, case-insensitive, * for any text, ? for ' +
-                'one character, e.g. *Discord*. App: empty for every app, or an app id or WM class. Press Enter ' +
+                'one character, e.g. *Discord*. App: empty for every app, or an app id or WM class (a pattern of ' +
+                'only * and ? needs one: it matches every title). Press Enter ' +
                 'to save a rule. While a rule is invalid, or a title is longer than 4096 characters, every title ' +
                 'is sent empty. Rules only change what is sent as the window title, not screenshots.',
         });
@@ -199,10 +200,12 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
                     text += ' Every window title is sent empty until this rule is fixed or removed.';
                 r.expander.title = r.pattern.text || 'New rule';
                 r.expander.subtitle = text;
-                for (const entry of [r.pattern, r.label])
+                for (const entry of [r.app, r.pattern, r.label])
                     entry.remove_css_class('error');
-                if (problem)
-                    (/label/.test(problem) ? r.label : r.pattern).add_css_class('error');
+                if (problem) {
+                    const field = /^The app /.test(problem) ? r.app : /^The label /.test(problem) ? r.label : r.pattern;
+                    field.add_css_class('error');
+                }
             });
             add.sensitive = rows.length < TITLE_RULES_MAX;
         };
