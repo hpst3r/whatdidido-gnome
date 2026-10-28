@@ -154,10 +154,12 @@ name, the WM class and the window title, or "no focused window".
 
 - Sent only while the last status poll shows the session **recording** and the
   server offering window activity, and the **Record active window** setting is
-  on. Nothing is sent while paused, reconnecting, stopped or not running.
+  on. Nothing is sent while reconnecting, stopped or not running, nor while
+  paused, except to a session that advertises `geometry` (below).
 - Changes (focus, title, WM class) settle for 1 s, then the current window is
   sent if it differs from the last one sent; at most one request per 2 s.
-  After every start/resume/reconnect the current window is sent again.
+  After every start/resume/reconnect the current window is sent again at once
+  (no settle).
   So it is when the status's `window_activity.epoch` changed since the last poll
   (a pause/resume or recovery between two polls); servers without it are fine.
 - A failed report (no answer, timeout, 5xx, 400) is retried with the window
@@ -171,6 +173,64 @@ name, the WM class and the window title, or "no focused window".
   server's 8 KiB limit for windows even when every character needs escaping.
 - The Active window tile is insensitive, with "Not enabled on the server",
   when the server doesn't offer it.
+
+### Monitors (at-rest guard)
+
+whatdidido's at-rest guard (its `AT_REST_GUARD.md` section 6) drops screenshots
+showing a sensitive focused window, such as a password manager, before they are
+stored. It applies those window rules only to the screenshots of the monitors
+showing the focused window, so it needs to know which monitors those are. When
+the status's `window_activity` says `"geometry": true`, each window report also
+carries:
+
+- `monitors`: the rectangles (`[x, y, w, h]`, Mutter's logical layout
+  coordinates) of the monitors the focused window's frame overlaps (an edge that
+  only touches a monitor doesn't count), sorted by x then y, at most 16. A
+  window that is on no monitor sends no `monitors` key, so the session treats
+  its monitors as unknown.
+- `changed_at`: when the focus, the title, the WM class or the window's monitor
+  set changed (UTC, millisecond precision, `2026-10-23T12:34:56.789Z`). It is
+  taken when the shell signal fired, not when the report is sent after the 1 s
+  settle, so the session can match it with screenshots captured in between.
+
+Moving or resizing the focused window, and monitor layout changes, are only
+reported when they change the window's set of monitors (not on every pixel of a
+drag). The usual 1 s settle and 2 s spacing apply, and a report that only
+differs in `changed_at` isn't sent again.
+
+Changes that come within one settle are a burst, sent as one report (its
+`AT_REST_GUARD.md` Amendment 2, A2.3). That report carries the **union** of the
+monitor sets seen during the burst and the burst's **first** change time, so
+every screenshot captured during it is matched with every monitor the window
+was on (dropping too much is the safe direction). Dragging a window from
+monitor 1 across to monitor 2 within 1 s sends both monitors, stamped when it
+first reached monitor 2; when the union is more than where the window ended
+up, its current monitors follow one settle later. A failed report is retried
+with its union and time.
+
+**Limit:** a window focused for less than the settle, such as alt-tabbing
+through a password manager to another window, is never reported by name: the
+burst reports the window focused at its end (with the monitors of both). A
+screenshot captured while the password manager was focused is then matched
+with the other window, so only the session's text rules apply to it. The monitor rectangles count toward
+the 3500-byte limit, so a long title is shortened sooner. **An older session
+that doesn't advertise `geometry` gets exactly the reports described above,
+with neither key** (it would refuse them with `400 invalid`). `{"focus":
+"none"}` never carries them.
+
+After a start, resume or reconnect, the session holds each screenshot until
+the first window report of the new `window_activity.epoch` arrives (its
+`AT_REST_GUARD.md` Amendment 2, A2.2). So, with such a session and **Record
+active window** on, the extension:
+
+- polls the status at `poll-active` (2 s) while the session is paused or
+  stopped too, not `poll-idle`, so a start or resume is seen within one poll;
+- reports the focused window while **paused** too, with `changed_at`, so a
+  password manager focused during a pause is known at the resume. The session
+  answers these with `recorded: false` (not counted as active time), which is
+  a success: nothing is retried;
+- sends the current window at once when the epoch changes, and when the
+  session goes from paused to recording.
 
 ## Privacy
 
@@ -192,18 +252,23 @@ name, the WM class and the window title, or "no focused window".
 - Microphone capture is only offered when the server was started with
   `--allow-audio-capture`; otherwise the switch is insensitive.
 - Window titles, app ids/names and WM classes are sent only to the loopback
-  work session from the control file, only while it is recording (never while
-  paused), and only when the server offers it and **Record active window** is
-  on. Apps listed in `window-title-excluded-apps` are reported with an empty
+  work session from the control file, only while it is recording (or paused,
+  to a session whose at-rest guard is configured; those reports are not
+  counted as active time), and only when the server offers it and **Record
+  active window** is on. Apps listed in `window-title-excluded-apps` are reported with an empty
   title. Window data is never logged; send errors are logged once per distinct
   message (the last 32 remembered) without titles or the token. The server stores reports as event
   metadata (see whatdidido's `TIME_ACCOUNTING.md` for where that can go).
+- The focused window's monitor rectangles and the change time are sent only
+  to a session that advertises `window_activity.geometry` (its at-rest guard
+  is configured). The session stores the monitors with the window report and
+  uses the change time only to match screenshots; it doesn't store it.
 
 ## Settings
 
 | Key | Default | |
 |---|---|---|
-| `poll-active` | 2 s | menu open, or starting/recording/reconnecting/stopping |
+| `poll-active` | 2 s | menu open, or starting/recording/reconnecting/stopping; also paused/stopped while the at-rest guard wants window reports |
 | `poll-idle` | 10 s | stopped/paused/failed/not running |
 | `microphone-stable-id` | empty | chosen in the menu (stable across reconnects); empty = none chosen |
 | `microphone-id` | empty | chosen microphone's opaque id; only used without a stable id; never a fallback to another microphone |
@@ -242,8 +307,10 @@ microphone choice (matching, migration, the popover's texts and the
 `MicController` behind the mic tile and the input list). Likewise
 `lib/window_model.js` holds the active-window rules (payload, sanitising,
 debounce/spacing/retry scheduler on an injected clock, availability gating,
-the focused window's signal bookkeeping) and `lib/window_tracker.js` only
-connects the Shell signals and GLib timers to it. `lib/pause_reminder.js`
+the monitors a window overlaps and when that set changes, the focused window's
+signal bookkeeping) and `lib/window_tracker.js` only connects the Shell
+signals and GLib timers to it (tested against fakes in
+`tests/window_tracker_test.js`). `lib/pause_reminder.js`
 holds the pause reminder's rules (paused-since, due time, repeats, withdraw,
 "Stop reminding", texts) on an injected clock; `extension.js` arms one GLib
 timeout for its next due time and shows the notification; `lib/mic_reminder.js`

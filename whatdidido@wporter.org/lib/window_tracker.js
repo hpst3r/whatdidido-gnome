@@ -1,17 +1,24 @@
 import GLib from 'gi://GLib';
-import Shell from 'gi://Shell';
 
-import {FocusWatch, WindowReporter} from './window_model.js';
+import {FocusWatch, MonitorSet, WindowReporter, windowMonitors} from './window_model.js';
 
-// Glue only: watches the focused window (focus, title, wm-class), the two
-// settings, and GLib timers, and feeds WindowReporter (window_model.js),
-// which decides what is sent and when.
+// Glue only: watches the focused window (focus, title, wm-class, position,
+// size), the monitor layout, the two settings, and GLib timers, and feeds
+// WindowReporter (window_model.js), which decides what is sent and when.
+// Frame rects and monitor geometries are both Mutter logical layout
+// coordinates (AT_REST_GUARD.md section 6).
 export class WindowTracker {
     // send(payload) -> Promise (ControlClient.postWindow); log(message);
-    // onUnavailable(): the server answered 409 (re-render the menu).
-    constructor({settings, send, log, onUnavailable}) {
+    // onUnavailable(): the server answered 409 (re-render the menu);
+    // apps: Shell.WindowTracker; display: the shell's MetaDisplay;
+    // monitorManager: its MetaMonitorManager (injected so
+    // tests/window_tracker_test.js runs this glue against fakes).
+    constructor({settings, send, log, onUnavailable, apps, display = global.display,
+        monitorManager = global.backend.get_monitor_manager()}) {
         this._settings = settings;
-        this._tracker = Shell.WindowTracker.get_default();
+        this._tracker = apps;
+        this._display = display;
+        this._monitorManager = monitorManager;
         this._timers = new Set();
 
         this._reporter = new WindowReporter({
@@ -43,14 +50,24 @@ export class WindowTracker {
             settings.connect('changed::window-title-excluded-apps',
                 () => this._reporter.setExcluded(settings.get_strv('window-title-excluded-apps'))),
         ];
-        // Title/wm-class signals follow the focused window only.
-        this._focusWatch = new FocusWatch(() => this._reporter.changed());
-        this._focusId = global.display.connect('notify::focus-window', () => this._onFocus());
-        this._focusWatch.watch(global.display.focus_window);
+        // Title/wm-class/position/size signals follow the focused window
+        // only. A move, resize or layout change is reported only when it
+        // changes the window's monitor set (not on every pixel of a drag).
+        this._monitorSet = new MonitorSet(() => this._readMonitors(), () => this._reporter.changed());
+        this._focusWatch = new FocusWatch(() => this._reporter.changed(), () => this._monitorSet.update());
+        this._focusId = display.connect('notify::focus-window', () => this._onFocus());
+        this._monitorsId = monitorManager.connect('monitors-changed', () => this._monitorSet.update());
+        this._focusWatch.watch(display.focus_window);
+        this._monitorSet.reset();
     }
 
     get unavailable() {
         return this._reporter.unavailable;
+    }
+
+    // Poll at poll-active while paused or stopped too (WindowReporter.watching).
+    get watching() {
+        return this._reporter.watching;
     }
 
     // After every status poll (status null when the server is not running).
@@ -60,7 +77,7 @@ export class WindowTracker {
 
     // Only called by the reporter while reporting is active.
     _readFocus() {
-        const win = global.display.focus_window;
+        const win = this._display.focus_window;
         if (!win)
             return null;
         const app = this._tracker.get_window_app(win);
@@ -69,11 +86,24 @@ export class WindowTracker {
             appName: app?.get_name() ?? null,
             wmClass: win.get_wm_class(),
             title: win.get_title(),
+            frame: win.get_frame_rect(),
+            layout: this._layout(),
         };
     }
 
+    _layout() {
+        const display = this._display;
+        return Array.from({length: display.get_n_monitors()}, (_, i) => display.get_monitor_geometry(i));
+    }
+
+    _readMonitors() {
+        const win = this._display.focus_window;
+        return windowMonitors(win ? win.get_frame_rect() : null, this._layout());
+    }
+
     _onFocus() {
-        this._focusWatch.watch(global.display.focus_window);
+        this._focusWatch.watch(this._display.focus_window);
+        this._monitorSet.reset();
         this._reporter.changed();
     }
 
@@ -82,7 +112,8 @@ export class WindowTracker {
         for (const id of this._timers)
             GLib.source_remove(id);
         this._timers.clear();
-        global.display.disconnect(this._focusId);
+        this._display.disconnect(this._focusId);
+        this._monitorManager.disconnect(this._monitorsId);
         this._focusWatch.clear();
         for (const id of this._settingsIds)
             this._settings.disconnect(id);

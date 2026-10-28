@@ -5,6 +5,9 @@
 // Payloads are POST /control/v1/window bodies:
 //   {"focus": "none"} or
 //   {"focus": "window", "app_id": s, "app_name": s, "wm_class": s, "title": s}
+// plus, only while the last poll showed window_activity.geometry === true
+// (the at-rest guard, AT_REST_GUARD.md section 6), the optional
+//   "monitors": [[x, y, w, h], ...], "changed_at": "<RFC 3339 UTC>"
 
 export const SETTLE_MS = 1000;
 export const SPACING_MS = 2000;
@@ -17,6 +20,9 @@ export const APP_FIELD_MAX_CHARS = 255;
 export const TITLE_MAX_CHARS = 1024;
 // The server's metadata budget: sum of the UTF-8 bytes of every key and value.
 export const METADATA_MAX_BYTES = 3500;
+// At most this many monitor rectangles; coordinates are signed 32-bit, sizes positive.
+export const MONITORS_MAX = 16;
+const COORD_MAX = 2 ** 31 - 1;
 
 const ELLIPSIS = '…';
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -32,10 +38,15 @@ export function utf8Length(s) {
     return n;
 }
 
+// The session stores monitors as compact JSON ("[[0,0,1920,1080]]") and
+// never stores changed_at.
 export function metadataBytes(payload) {
     let n = 0;
-    for (const [k, v] of Object.entries(payload))
-        n += utf8Length(k) + utf8Length(v);
+    for (const [k, v] of Object.entries(payload)) {
+        if (k === 'changed_at')
+            continue;
+        n += utf8Length(k) + utf8Length(k === 'monitors' ? JSON.stringify(v) : v);
+    }
     return n;
 }
 
@@ -50,6 +61,8 @@ function clean(value, maxChars) {
 // The server's sanitising, applied client-side so what is sent is what gets
 // recorded: control characters -> space, clamp each field, then shorten the
 // title (ending with '…') until the metadata fits METADATA_MAX_BYTES.
+// monitors and changed_at pass through unchanged (monitors are never
+// shortened: they count toward the budget, so the title gives way).
 export function sanitizeWindow(payload) {
     if (payload.focus !== 'window')
         return {focus: 'none'};
@@ -60,6 +73,10 @@ export function sanitizeWindow(payload) {
         wm_class: clean(payload.wm_class, APP_FIELD_MAX_CHARS),
         title: clean(payload.title, TITLE_MAX_CHARS),
     };
+    if (payload.monitors !== undefined)
+        out.monitors = payload.monitors;
+    if (payload.changed_at !== undefined)
+        out.changed_at = payload.changed_at;
     const total = metadataBytes(out);
     if (total > METADATA_MAX_BYTES) {
         let budget = METADATA_MAX_BYTES - (total - utf8Length(out.title)) - utf8Length(ELLIPSIS);
@@ -87,35 +104,110 @@ export function isExcluded(appId, excluded) {
     return (excluded ?? []).some(e => typeof e === 'string' && e.trim() !== '' && bareId(e) === id);
 }
 
+// --- window geometry (AT_REST_GUARD.md section 6) ---------------------------
+// Rectangles are [x, y, w, h] arrays; the shell's are Mtk.Rectangle-like
+// {x, y, width, height}, all in logical layout coordinates.
+
+// Overlap with a positive area: touching edges or corners do not count.
+export function rectsIntersect([ax, ay, aw, ah], [bx, by, bw, bh]) {
+    return Math.max(ax, bx) < Math.min(ax + aw, bx + bw) && Math.max(ay, by) < Math.min(ay + ah, by + bh);
+}
+
+// [x, y, w, h] of a shell rectangle, or null when the server would refuse it.
+function rectOf(r) {
+    if (!r)
+        return null;
+    const {x, y, width, height} = r;
+    const ok = [x, y, width, height].every(v => Number.isInteger(v) && Math.abs(v) <= COORD_MAX);
+    return ok && width > 0 && height > 0 ? [x, y, width, height] : null;
+}
+
+function compareRects(a, b) {
+    for (let i = 0; i < 4; i++) {
+        if (a[i] !== b[i])
+            return a[i] - b[i];
+    }
+    return 0;
+}
+
+// Sorted by x, then y (then size), deduplicated, at most MONITORS_MAX.
+function monitorList(rects) {
+    const sorted = [...rects].sort(compareRects);
+    return sorted.filter((m, i) => i === 0 || compareRects(m, sorted[i - 1]) !== 0).slice(0, MONITORS_MAX);
+}
+
+// The monitors the window's frame rect intersects with a positive area, as
+// a monitorList(). Empty when the frame is unknown or off every monitor.
+export function windowMonitors(frame, layout) {
+    const win = rectOf(frame);
+    if (!win)
+        return [];
+    return monitorList((layout ?? []).map(rectOf).filter(m => m && rectsIntersect(win, m)));
+}
+
+// Two windowMonitors() results (either may be missing) as one monitorList().
+export function unionMonitors(a, b) {
+    return monitorList([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]);
+}
+
+export function sameMonitors(a, b) {
+    return Array.isArray(a) && Array.isArray(b) && JSON.stringify(a) === JSON.stringify(b);
+}
+
+// An RFC 3339 UTC instant with millisecond precision: 2026-10-23T12:34:56.789Z.
+export function rfc3339(ms) {
+    return new Date(Math.floor(ms)).toISOString();
+}
+
 // raw: null (no focused window) or what the shell reports:
-// {appId, appName, wmClass, title}, any of which may be null/undefined.
-export function windowPayload(raw, excluded = []) {
+// {appId, appName, wmClass, title, frame, layout}, any of which may be
+// null/undefined; frame is the window's frame rect, layout the monitor
+// rectangles. geometry: the last poll showed window_activity.geometry;
+// only then are monitors (when non-empty; none means "unknown") and
+// changed_at (ms since the epoch, when known) added. seen: monitor sets
+// already seen in this burst (AT_REST_GUARD.md A2.3), added to the window's.
+export function windowPayload(raw, excluded = [], {geometry = false, changedAt = null, seen = []} = {}) {
     if (!raw)
         return {focus: 'none'};
     const str = v => (typeof v === 'string' ? v : '');
     let appId = str(raw.appId);
     if (appId.startsWith('window:'))  // Shell's synthetic id for app-less windows
         appId = '';
-    return sanitizeWindow({
+    const payload = {
         focus: 'window',
         app_id: appId,
         app_name: str(raw.appName),
         wm_class: str(raw.wmClass),
         title: isExcluded(appId, excluded) ? '' : str(raw.title),
-    });
+    };
+    if (geometry) {
+        const monitors = unionMonitors(windowMonitors(raw.frame, raw.layout), seen);
+        if (monitors.length > 0)
+            payload.monitors = monitors;
+        if (Number.isFinite(changedAt))
+            payload.changed_at = rfc3339(changedAt);
+    }
+    return sanitizeWindow(payload);
 }
 
-// Payloads are always built with the same key order.
+// Payloads are always built with the same key order. changed_at is not
+// compared (the session neither stores nor compares it); monitors are.
 export function samePayload(a, b) {
-    return !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
+    const comparable = p => JSON.stringify({...p, changed_at: undefined});
+    return !!a && !!b && comparable(a) === comparable(b);
 }
 
 export function windowActivityOffered(status, running) {
     return !!running && status?.window_activity?.available === true;
 }
 
+// Paused too while the session takes geometry (AT_REST_GUARD.md A2.2): its
+// at-rest guard holds the first frames after a resume until a focus report
+// arrives, and answers paused reports with recorded: false.
 export function windowEligible(status, running) {
-    return windowActivityOffered(status, running) && status.state === 'recording';
+    if (!windowActivityOffered(status, running))
+        return false;
+    return status.state === 'recording' || (status.state === 'paused' && windowGeometry(status, running));
 }
 
 // window_activity.epoch (Amendment 1): bumped by the server whenever it
@@ -123,6 +215,12 @@ export function windowEligible(status, running) {
 export function windowEpoch(status, running) {
     const epoch = windowActivityOffered(status, running) ? status.window_activity.epoch : undefined;
     return Number.isInteger(epoch) && epoch >= 0 ? epoch : null;
+}
+
+// window_activity.geometry (CONTROL_API.md Amendment 4): the session accepts
+// monitors and changed_at. An older session answers them with 400 invalid.
+export function windowGeometry(status, running) {
+    return windowActivityOffered(status, running) && status.window_activity.geometry === true;
 }
 
 const SWITCH_LABEL = 'Record active window';
@@ -154,7 +252,9 @@ export function formatExcludedApps(list) {
 // Decides when to POST the focused window.
 //
 // - Active only while enabled, the last poll showed window_activity.available
-//   and state "recording", and no 409 came back since that poll.
+//   and state "recording" (or "paused" with window_activity.geometry), and no
+//   409 came back since that poll. A paused report is answered with
+//   recorded: false, which is a success like any 202.
 // - changed() (re)arms a SETTLE_MS timer; on fire the payload is built from
 //   the *current* focus and skipped if equal to the last one sent.
 // - At most one POST per SPACING_MS, one in flight at a time; a send inside
@@ -162,7 +262,21 @@ export function formatExcludedApps(list) {
 // - Becoming active (transition into recording, from unavailable, setting
 //   turned on) forgets the last payload and sends at once (spacing permitting).
 //   So does a changed window_activity.epoch between two polls while active
-//   (a pause and resume, or a recovery, the polls did not see).
+//   (a start, resume or recovery, seen or not by the polls), a paused ->
+//   recording edge, and a changed window_activity.geometry (the keys the
+//   session accepts changed).
+// - monitors and changed_at are added only while the last poll showed
+//   window_activity.geometry === true. Dedupe ignores changed_at.
+// - A burst is the changed() calls while active up to the payload built
+//   from them (one settle, or longer when spacing or a failed POST delays
+//   it). Its payload carries the union of the monitor sets read at each
+//   call and at build time, stamped with the burst's first change time
+//   (AT_REST_GUARD.md A2.3: over-dropping is the safe direction). When the
+//   union is more than the window's current set, a follow-up burst starting
+//   at build time reports the current set after the settle. Without a burst
+//   (becoming active, a re-send), changed_at is the time of the last
+//   changed() call, or of construction before any. A failed POST puts its
+//   burst back (merged with any newer one) for the retry.
 // - Becoming inactive cancels every pending timer. Turning the setting off
 //   while active sends {"focus": "none"} once (after any request in flight,
 //   spacing permitting; never retried), unless recording/availability ends
@@ -173,15 +287,16 @@ export function formatExcludedApps(list) {
 //   goes through the settle timer instead).
 // - Errors are logged once per distinct message (the last LOGGED_MAX kept).
 //
-// deps: now() -> ms (monotonic); setTimer(ms, fn) -> id; clearTimer(id);
-// readFocus() -> raw focus for windowPayload(); send(payload) -> Promise
-// (rejects with {status, code, message}); log(message); onUnavailable()
-// after a 409 turned reporting off until the next poll.
+// deps: now() -> ms (monotonic); wallNow() -> ms since the epoch (for
+// changed_at); setTimer(ms, fn) -> id; clearTimer(id); readFocus() -> raw
+// focus for windowPayload(); send(payload) -> Promise (rejects with
+// {status, code, message}); log(message); onUnavailable() after a 409 turned
+// reporting off until the next poll.
 export class WindowReporter {
-    constructor({now, setTimer, clearTimer, readFocus, send, log = () => {}, onUnavailable = () => {},
-        enabled = true, excluded = [], settleMs = SETTLE_MS, spacingMs = SPACING_MS,
+    constructor({now, wallNow = () => Date.now(), setTimer, clearTimer, readFocus, send, log = () => {},
+        onUnavailable = () => {}, enabled = true, excluded = [], settleMs = SETTLE_MS, spacingMs = SPACING_MS,
         retryMinMs = RETRY_MIN_MS, retryMaxMs = RETRY_MAX_MS}) {
-        Object.assign(this, {_now: now, _setTimer: setTimer, _clearTimer: clearTimer,
+        Object.assign(this, {_now: now, _wallNow: wallNow, _setTimer: setTimer, _clearTimer: clearTimer,
             _readFocus: readFocus, _send: send, _log: log, _onUnavailable: onUnavailable, _settleMs: settleMs, _spacingMs: spacingMs,
             _retryMinMs: retryMinMs, _retryMaxMs: retryMaxMs});
         this._enabled = !!enabled;
@@ -192,6 +307,10 @@ export class WindowReporter {
         this._last = null;          // last payload the server accepted (202)
         this._generation = 0;       // bumped whenever _last is forgotten
         this._epoch = null;         // window_activity.epoch of the last poll
+        this._geometry = false;     // window_activity.geometry of the last poll
+        this._recording = false;    // the last poll showed state "recording"
+        this._changedAt = wallNow(); // wall-clock ms of the last change signal
+        this._burst = null;         // unsent changes while active: {since, monitors}
         this._lastSendAt = -Infinity;
         this._settleTimer = null;
         this._spacingTimer = null;
@@ -209,6 +328,18 @@ export class WindowReporter {
 
     get unavailable() {
         return this._unavailable;
+    }
+
+    get geometry() {
+        return this._geometry;
+    }
+
+    // The session's at-rest guard wants focus reports (enabled, geometry
+    // offered, no 409 since the last poll), whatever its state: the
+    // extension then polls at poll-active while paused or stopped too, so a
+    // start or resume is seen quickly (AT_REST_GUARD.md A2.2).
+    get watching() {
+        return !this._destroyed && this._enabled && this._geometry && !this._unavailable;
     }
 
     setEnabled(on) {
@@ -232,26 +363,34 @@ export class WindowReporter {
         const epoch = windowEpoch(status, running);
         const epochChanged = epoch !== null && this._epoch !== null && epoch !== this._epoch;
         this._epoch = epoch;
+        const geometry = windowGeometry(status, running);
+        const geometryChanged = geometry !== this._geometry;
+        this._geometry = geometry;
+        const recording = windowEligible(status, running) && status.state === 'recording';
+        const resumed = recording && !this._recording;
+        this._recording = recording;
         this._update(() => {
             this._eligible = windowEligible(status, running);
             this._unavailable = false;
-        }, epochChanged);
+        }, epochChanged || geometryChanged || resumed);
         // Not recording (or not offered) any more: the server no longer
         // attributes time to the last window, so "none" is not needed.
         if (!this._eligible)
             this._offPending = false;
     }
 
-    // Focus, title or wm-class changed.
+    // Focus, title, wm-class or the focused window's monitor set changed.
+    // Stamped even while inactive: becoming active sends it with this time.
     changed() {
+        this._changedAt = this._wallNow();
         if (!this.active)
             return;
+        this._burst ??= {since: this._changedAt, monitors: []};
+        if (this._geometry)
+            this._burst.monitors = unionMonitors(this._burst.monitors, this._currentMonitors(this._readFocus()));
         this._clear('_settleTimer');
         this._clear('_retryTimer');
-        this._settleTimer = this._setTimer(this._settleMs, () => {
-            this._settleTimer = null;
-            this._flush();
-        });
+        this._armSettle();
     }
 
     destroy() {
@@ -260,6 +399,19 @@ export class WindowReporter {
         this._clear('_settleTimer');
         this._clear('_spacingTimer');
         this._clear('_retryTimer');
+    }
+
+    _armSettle() {
+        if (this._settleTimer !== null)
+            return;
+        this._settleTimer = this._setTimer(this._settleMs, () => {
+            this._settleTimer = null;
+            this._flush();
+        });
+    }
+
+    _currentMonitors(raw) {
+        return raw ? windowMonitors(raw.frame, raw.layout) : [];
     }
 
     _clear(name) {
@@ -283,6 +435,7 @@ export class WindowReporter {
             this._clear('_retryTimer');
             this._flush();
         } else if (was && !is) {
+            this._burst = null;
             this._clear('_settleTimer');
             this._clear('_spacingTimer');
             this._clear('_retryTimer');
@@ -317,10 +470,21 @@ export class WindowReporter {
             this._post({focus: 'none'});
             return;
         }
-        const payload = windowPayload(this._readFocus(), this._excluded);
+        const raw = this._readFocus();
+        const burst = this._burst;
+        this._burst = null;
+        const payload = windowPayload(raw, this._excluded,
+            {geometry: this._geometry, changedAt: burst?.since ?? this._changedAt, seen: burst?.monitors});
+        if (payload.monitors) {
+            const current = this._currentMonitors(raw);
+            if (!sameMonitors(payload.monitors, current)) {
+                this._burst = {since: this._wallNow(), monitors: current};
+                this._armSettle();
+            }
+        }
         if (samePayload(payload, this._last))
             return;
-        this._post(payload);
+        this._post(payload, burst);
     }
 
     _logOnce(msg) {
@@ -341,7 +505,7 @@ export class WindowReporter {
         });
     }
 
-    async _post(payload) {
+    async _post(payload, burst = null) {
         const generation = this._generation;
         this._clear('_retryTimer');
         this._inFlight = true;
@@ -360,6 +524,12 @@ export class WindowReporter {
             // The server may or may not have recorded it: dedupe against
             // nothing until a POST succeeds.
             this._forget();
+            if (burst) {
+                const newer = this._burst;
+                this._burst = newer
+                    ? {since: Math.min(burst.since, newer.since), monitors: unionMonitors(burst.monitors, newer.monitors)}
+                    : burst;
+            }
             if (e?.code === 'unavailable') {
                 this._update(() => {
                     this._unavailable = true;
@@ -380,12 +550,14 @@ export class WindowReporter {
 }
 
 // Signal bookkeeping for the focused window (window_tracker.js): follows one
-// window at a time and calls onChange() on its title/wm-class changes. Its
-// `unmanaged` signal drops the handlers (Amendment 2 item 6); disconnecting
-// tolerates a window that is already disposed.
+// window at a time and calls onChange() on its title/wm-class changes, and
+// onMove() (when given) on its position/size changes. Its `unmanaged` signal
+// drops the handlers (Amendment 2 item 6); disconnecting tolerates a window
+// that is already disposed.
 export class FocusWatch {
-    constructor(onChange) {
+    constructor(onChange, onMove = null) {
         this._onChange = onChange;
+        this._onMove = onMove;
         this._window = null;
         this._ids = [];
     }
@@ -404,6 +576,11 @@ export class FocusWatch {
             win.connect('notify::wm-class', () => this._onChange()),
             win.connect('unmanaged', () => this.clear()),
         ];
+        if (this._onMove) {
+            this._ids.push(
+                win.connect('position-changed', () => this._onMove()),
+                win.connect('size-changed', () => this._onMove()));
+        }
     }
 
     clear() {
@@ -417,5 +594,34 @@ export class FocusWatch {
                 // The window is already gone; so are its handlers.
             }
         }
+    }
+}
+
+// The focused window's monitor set (AT_REST_GUARD.md section 6): compute()
+// returns windowMonitors() for the focused window now. update() (on a move,
+// resize or monitor layout change) calls onChange() only when the set
+// differs from the last one, so a drag within a monitor reports nothing.
+// reset() (on a focus change, which is reported anyway) only remembers it.
+export class MonitorSet {
+    constructor(compute, onChange) {
+        this._compute = compute;
+        this._onChange = onChange;
+        this._monitors = null;
+    }
+
+    get monitors() {
+        return this._monitors;
+    }
+
+    reset() {
+        this._monitors = this._compute();
+    }
+
+    update() {
+        const next = this._compute();
+        if (sameMonitors(next, this._monitors))
+            return;
+        this._monitors = next;
+        this._onChange();
     }
 }
