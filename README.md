@@ -195,12 +195,44 @@ The first rule that matches wins. Rules see the full title (control
 characters as spaces) before it is shortened, so a label replaces a long
 title whose match is past the first 1024 characters, and nothing of it is
 ever sent. Apps in `window-title-excluded-apps` are still sent with an empty
-title. Settings refuses an empty pattern and one of only `*` (it would hide
-every title: turn **Record active window** off instead), shows why next to
-the rule and doesn't save it. At most 100 rules, with patterns and labels of
-at most 200 characters; the extension ignores entries that break these
-limits (from `dconf` or `gsettings`) and logs their number once, never their
-text. A rule change applies to the focused window within the usual 1 s settle.
+title. A rule change applies to the focused window within the usual 1 s
+settle.
+
+Case-insensitive means each character is lowercased on its own (JavaScript
+`toLowerCase`, the same for the pattern and the title), not full Unicode case
+folding: `É` matches `é` and `Ж` matches `ж`, but `ß` doesn't match `SS` and
+`ﬁ` doesn't match `fi`, and `?` is always one character of the title as
+written. App ids are compared exactly (like excluded apps), WM classes
+case-insensitively.
+
+Limits: at most 100 rules, patterns of at most 60 characters and labels of
+at most 200 (all counted in characters, i.e. code points). Only titles of up
+to 4096 characters are matched. These keep the worst case, 100 rules on a
+4096-character title, at about 2 ms in the shell's main loop (measured by
+`tests/window_title_rules_test.js`, which fails above 8 ms).
+
+**Title rules fail closed.** The rule meant to hide a title is never skipped
+quietly:
+
+- While `window-title-rules` holds any entry that can't be used (more than
+  100 rules, an empty pattern or one of only `*`, a pattern or label over
+  its limit; possible through `dconf` or `gsettings`), **every** window title
+  is sent empty until the setting is fixed. The extension logs this once per
+  distinct bad setting, naming the entries by number, never their text, and
+  Settings marks the row ("Every window title is sent empty until this rule
+  is fixed or removed").
+- With at least one rule set, a title longer than 4096 characters is sent
+  empty rather than matched.
+
+In Settings → **Window title rules**, a rule is saved when you press Enter
+in one of its fields or move the focus out of them (and when the window
+closes), and only when the whole rule is valid. Typing doesn't save, and
+while an edited rule is invalid (an empty pattern, one of only `*`, which
+would hide every title: turn **Record active window** off instead, or a
+field over its limit) Settings shows why next to it and the setting keeps
+the rule's last saved version, so editing a rule never drops it. A new rule
+is saved only once it is valid and committed; removing a rule saves at
+once.
 
 **Title rules only change the window metadata the extension sends** (the
 title). They don't touch screenshots: the same text visible in a window is
@@ -308,7 +340,8 @@ active window** on, the extension:
   counted as active time), and only when the server offers it and **Record
   active window** is on. Apps listed in `window-title-excluded-apps` are reported with an empty
   title; titles matching a `window-title-rules` rule are replaced by its label
-  (or emptied) before they are sent, but stay visible in screenshots. Window data is never logged; send errors are logged once per distinct
+  (or emptied) before they are sent, but stay visible in screenshots; while
+  that setting holds an unusable entry, every title is sent empty. Window data is never logged; send errors are logged once per distinct
   message (the last 32 remembered) without titles or the token. The server stores reports as event
   metadata (see whatdidido's `TIME_ACCOUNTING.md` for where that can go).
 - The focused window's monitor rectangles and the change time are sent only
@@ -328,7 +361,7 @@ active window** on, the extension:
 | `show-mic-indicator` | true | microphone icon in the top bar while it is on |
 | `report-active-window` | true | report the focused window while recording (server needs `--window-activity`) |
 | `window-title-excluded-apps` | empty | app ids (with or without `.desktop`) whose titles are sent empty; comma-separated in Settings |
-| `window-title-rules` | empty | `a(sss)`: (app, pattern, label); the first match replaces the title ([Title rules](#title-rules)) |
+| `window-title-rules` | empty | `a(sss)`: (app, pattern, label); the first match replaces the title; any unusable entry empties every title ([Title rules](#title-rules)) |
 | `window-title-ignore-digit-changes` | true | don't send title changes that only tick a short counter ([Counters in titles](#counters-in-titles)) |
 | `pause-reminder-minutes` | 10 | notify after this many minutes paused, then every this many minutes; 0 = off (0..240) |
 | `mic-reminder-minutes` | 10 | notify after this many minutes with the microphone on and no speech transcribed, then every this many minutes; 0 = off (0..240) |
