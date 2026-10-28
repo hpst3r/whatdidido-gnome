@@ -6,6 +6,7 @@
 // Run: gjs -m tests/window_tracker_test.js
 import System from 'system';
 
+import {COUNTER_SETTLE_MS, SETTLE_MS} from '../whatdidido@wporter.org/lib/window_model.js';
 import {WindowTracker} from '../whatdidido@wporter.org/lib/window_tracker.js';
 
 let failed = 0;
@@ -155,13 +156,21 @@ const t3 = new WindowTracker({settings: s3, send: p => {
     sent3.push(p.title);
     return Promise.resolve({recorded: true});
 }, log: () => {}, onUnavailable: () => {}, apps, display, monitorManager});
-const timers = [];
-t3._reporter._setTimer = (ms, fn) => timers.push(fn);
-t3._reporter._clearTimer = () => {};
+// Timers fire in order, at once, but only those of at most maxMs.
+let timers = [], timerId = 0;
+t3._reporter._setTimer = (ms, fn) => {
+    timers.push({id: ++timerId, ms, fn});
+    return timerId;
+};
+t3._reporter._clearTimer = id => {
+    timers = timers.filter(tm => tm.id !== id);
+};
 t3._reporter._spacingMs = 0;
-const fire = async () => {
-    while (timers.length)
-        timers.shift()();
+const fire = async (maxMs = Infinity) => {
+    for (let tm; (tm = timers.find(x => x.ms <= maxMs));) {
+        timers = timers.filter(x => x !== tm);
+        tm.fn();
+    }
     for (let i = 0; i < 20; i++)
         await null;
 };
@@ -174,12 +183,18 @@ await fire();
 eq('tracker: a rules change re-sends the current window', sent3, ['hidden', 'my secret 1']);
 c.title = 'my secret 7';
 c.emit('notify::title');
+await fire(SETTLE_MS);
+eq('tracker: a digit-only title change is held (filter on from settings)',
+    [sent3.length, timers.map(tm => tm.ms > SETTLE_MS && tm.ms <= COUNTER_SETTLE_MS)], [2, [true]]);
 await fire();
-eq('tracker: a digit-only title change is held (filter on from settings)', sent3.length, 2);
+eq('tracker: ... and sent once it settles', sent3, ['hidden', 'my secret 1', 'my secret 7']);
+c.title = 'my secret 8';
+c.emit('notify::title');
+await fire(SETTLE_MS);
 keys['window-title-ignore-digit-changes'] = false;
 s3.emit('changed::window-title-ignore-digit-changes');
 await fire();
-eq('tracker: turning the filter off sends it', sent3.at(-1), 'my secret 7');
+eq('tracker: turning the filter off sends it', sent3.at(-1), 'my secret 8');
 keys['window-title-ignore-digit-changes'] = true;
 s3.emit('changed::window-title-ignore-digit-changes');
 await fire();

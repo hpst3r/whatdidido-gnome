@@ -352,7 +352,8 @@ export function sameCounter(last, title) {
 }
 
 // Whether payload is last with only a counter ticked in its title: the same
-// window fields and monitors (changed_at aside).
+// window fields and monitors (changed_at aside). Such a payload is deferred
+// until its title settles (WindowReporter).
 export function counterTick(payload, last) {
     if (payload?.focus !== 'window' || last?.focus !== 'window')
         return false;
@@ -526,9 +527,18 @@ export function formatExcludedApps(list) {
 //   session accepts changed).
 // - Title rules (setTitleRules) replace the title before anything else; with
 //   ignoreDigitChanges, a payload that is the last one sent with only a
-//   counter ticked in its title (counterTick) is not sent while recording,
-//   unless its burst holds a focus change (changed(true)). Re-sends, retries
-//   (nothing sent to compare with) and paused reports always go out.
+//   counter ticked in its title (counterTick) is held while recording,
+//   unless its burst holds a focus change (changed(true)), and sent once the
+//   raw title has stayed unchanged for COUNTER_SETTLE_MS (each change of it
+//   restarts the wait), with the changed_at of its burst. So an FPS counter
+//   never sends while it ticks, and 'Issue 123' -> 'Issue 124' is recorded
+//   about 15 s late. Any other send (a newer payload, a focus change, a
+//   re-send, a retry, a paused report) drops the held one, as do going back
+//   to the sent title and becoming inactive: a focus change reports the new
+//   window at its usual time rather than first sending the old window's
+//   held title, which would delay the focus report by the spacing.
+//   Re-sends, retries (nothing sent to compare with) and paused reports
+//   always go out.
 // - monitors and changed_at are added only while the last poll showed
 //   window_activity.geometry === true. Dedupe ignores changed_at.
 // - A burst is the changed() calls while active up to the payload built
@@ -578,7 +588,9 @@ export class WindowReporter {
         this._geometry = false;     // window_activity.geometry of the last poll
         this._recording = false;    // the last poll showed state "recording"
         this._changedAt = wallNow(); // wall-clock ms of the last change signal
-        this._burst = null;         // unsent changes while active: {since, monitors, focus}
+        this._burst = null;         // unsent changes while active: {since, monitors, focus, at}
+        this._held = null;          // a counter tick waiting to settle: {payload, burst, title, retitled, due}
+        this._counterTimer = null;
         this._lastSendAt = -Infinity;
         this._settleTimer = null;
         this._spacingTimer = null;
@@ -668,6 +680,9 @@ export class WindowReporter {
             return;
         this._burst ??= {since: this._changedAt, monitors: [], focus: false};
         this._burst.focus ||= focus;
+        this._burst.at = this._now();
+        if (this._held && !this._held.retitled && this._readFocus()?.title !== this._held.title)
+            this._held.retitled = true;
         if (this._geometry)
             this._burst.monitors = unionMonitors(this._burst.monitors, this._currentMonitors(this._readFocus()));
         this._clear('_settleTimer');
@@ -681,6 +696,7 @@ export class WindowReporter {
         this._clear('_settleTimer');
         this._clear('_spacingTimer');
         this._clear('_retryTimer');
+        this._dropHeld();
     }
 
     // Logged when the list of problems changes (not through _logOnce: its
@@ -726,6 +742,7 @@ export class WindowReporter {
         const is = this.active;
         if (is && (!was || restart)) {
             this._forget();
+            this._dropHeld();
             this._offPending = false;
             if (!was)
                 this._failures = 0;
@@ -734,6 +751,7 @@ export class WindowReporter {
             this._flush();
         } else if (was && !is) {
             this._burst = null;
+            this._dropHeld();
             this._clear('_settleTimer');
             this._clear('_spacingTimer');
             this._clear('_retryTimer');
@@ -769,9 +787,9 @@ export class WindowReporter {
             return;
         }
         const raw = this._readFocus();
-        const burst = this._burst;
+        let burst = this._burst;
         this._burst = null;
-        const payload = windowPayload(raw, this._excluded,
+        let payload = windowPayload(raw, this._excluded,
             {geometry: this._geometry, changedAt: burst?.since ?? this._changedAt, seen: burst?.monitors,
                 rules: this._rules});
         if (payload.monitors) {
@@ -781,12 +799,44 @@ export class WindowReporter {
                 this._armSettle();
             }
         }
-        if (samePayload(payload, this._last))
+        if (samePayload(payload, this._last)) {
+            this._dropHeld();
             return;
-        // An FPS counter in the title: the window's first title stands.
-        if (this._ignoreDigits && this._recording && !burst?.focus && counterTick(payload, this._last))
-            return;
+        }
+        // A counter in the title: held until the title settles.
+        if (this._ignoreDigits && this._recording && !burst?.focus && counterTick(payload, this._last)) {
+            const held = this._held;
+            if (!held || held.retitled || !samePayload(held.payload, payload)) {
+                this._hold(payload, burst, raw);
+                return;
+            }
+            if (!held.due)
+                return;
+            ({payload, burst} = held);
+        }
+        this._dropHeld();
         this._post(payload, burst);
+    }
+
+    // Hold payload (built from burst) until COUNTER_SETTLE_MS after the
+    // burst's last change; then _flush() sends it if it is still current.
+    _hold(payload, burst, raw) {
+        this._clear('_counterTimer');
+        const held = {payload, burst, title: raw?.title, retitled: false, due: false};
+        this._held = held;
+        const wait = (burst?.at ?? this._now()) + COUNTER_SETTLE_MS - this._now();
+        this._counterTimer = this._setTimer(Math.max(0, wait), () => {
+            this._counterTimer = null;
+            held.due = true;
+            // A pending settle flushes it (or what replaced it).
+            if (this._settleTimer === null)
+                this._flush();
+        });
+    }
+
+    _dropHeld() {
+        this._held = null;
+        this._clear('_counterTimer');
     }
 
     _logOnce(msg, key = msg) {

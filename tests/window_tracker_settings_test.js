@@ -8,6 +8,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import System from 'system';
 
+import {SETTLE_MS} from '../whatdidido@wporter.org/lib/window_model.js';
 import {WindowTracker} from '../whatdidido@wporter.org/lib/window_tracker.js';
 
 let failed = 0;
@@ -60,14 +61,22 @@ const tracker = new WindowTracker({settings, send: p => {
     sent.push(p.title);
     return Promise.resolve({recorded: true});
 }, log: () => {}, onUnavailable: () => {}, apps, display, monitorManager: emitter()});
-// The reporter's timers, run by hand.
-const timers = [];
-tracker._reporter._setTimer = (ms, fn) => timers.push(fn);
-tracker._reporter._clearTimer = () => {};
+// The reporter's timers, run by hand: in order, at once, but only those
+// of at most maxMs (not the 15 s wait of a held counter tick).
+let timers = [], timerId = 0;
+tracker._reporter._setTimer = (ms, fn) => {
+    timers.push({id: ++timerId, ms, fn});
+    return timerId;
+};
+tracker._reporter._clearTimer = id => {
+    timers = timers.filter(tm => tm.id !== id);
+};
 tracker._reporter._spacingMs = 0;
-const fire = async () => {
-    while (timers.length)
-        timers.shift()();
+const fire = async (maxMs = SETTLE_MS) => {
+    for (let tm; (tm = timers.find(x => x.ms <= maxMs));) {
+        timers = timers.filter(x => x !== tm);
+        tm.fn();
+    }
     for (let i = 0; i < 20; i++)
         await null;
 };
@@ -81,7 +90,7 @@ tracker.updateStatus({state: 'recording', window_activity: {available: true, rec
 await fire();
 eq('defaults: no rules, the title is sent', sent, ['Remote 30 FPS']);
 await tick('Remote 31 FPS');
-eq('schema default: a digit-only change is not sent (the filter is on)', sent, ['Remote 30 FPS']);
+eq('schema default: a digit-only change is held (the filter is on)', [sent, timers.length], [['Remote 30 FPS'], 1]);
 
 settings.set_value('window-title-rules', new GLib.Variant('a(sss)', [['ninja', 'Remote * FPS', 'Remote session']]));
 await fire();

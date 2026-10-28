@@ -224,6 +224,27 @@ async function main() {
     await h.advance(SETTLE_MS);
     eq('focus back: the window\'s current title is sent at once', h.titles().at(-1), 'Issue 124 - GitHub');
 
+    // Away and back to the old title, then the same tick again: a new wait,
+    // not the old one (the focus reports dropped the held title).
+    h = harness();
+    await h.start();
+    t1 = h.t;
+    h.title('Issue 124 - GitHub');
+    await h.advance(5000);
+    h.focus = {...OTHER};
+    h.r.changed(true);
+    await h.advance(2000);
+    h.focus = {...RAW};
+    h.r.changed(true);
+    await h.advance(5000);
+    eq('away and back to 123: both focus reports', h.titles(), ['Issue 123 - GitHub', 'Terminal', 'Issue 123 - GitHub']);
+    h.title('Issue 124 - GitHub');
+    await h.advance(COUNTER_SETTLE_MS - 1);
+    eq('the same tick again: no send on the old wait', h.titles().length, 3);
+    await h.advance(1);
+    eq('the same tick again: sent 15 s after it', [h.titles().at(-1), h.last().at - t1],
+        ['Issue 124 - GitHub', 12000 + COUNTER_SETTLE_MS]);
+
     // Focus away and back within one settle: a focus burst always sends.
     h = harness();
     await h.start();
@@ -244,6 +265,8 @@ async function main() {
     h.title('Issue 124 - GitHub');
     await h.advance(5000);
     h.r.setEnabled(false);
+    await h.advance(SPACING_MS);
+    eq('disabled inside the 15 s: no timer left', h.timers.size, 0);
     await h.advance(60000);
     eq('disabled inside the 15 s: "none" once, the held title never', h.titles(), ['Issue 123 - GitHub', 'none']);
     h.r.setEnabled(true);
