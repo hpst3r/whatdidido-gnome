@@ -114,6 +114,13 @@ export function isExcluded(appId, excluded) {
 // from them: the matcher runs in the shell's main loop.
 export const TITLE_RULES_MAX = 100;
 export const TITLE_RULE_FIELD_MAX = 200;
+export const TITLE_RULE_MATCH_MAX = 1024;  // stub (RED)
+export function titleEntryProblem() {
+    return null;
+}
+export function parseTitleRule() {
+    return {rule: [], problem: null};
+}
 
 const fold = ch => ch.toLowerCase();
 

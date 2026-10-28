@@ -26,6 +26,9 @@ test:
 	gjs -m tests/window_title_rules_test.js
 	gjs -m tests/window_digit_filter_test.js
 	gjs -m tests/window_tracker_test.js
+	mkdir -p $(TEST_RUNTIME)/schemas
+	glib-compile-schemas --strict --targetdir=$(TEST_RUNTIME)/schemas $(SRC)/schemas
+	gjs -m tests/window_tracker_settings_test.js $(TEST_RUNTIME)/schemas
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size
 	gjs -m tests/window_geometry_client_test.js $(TEST_RUNTIME)/geometry

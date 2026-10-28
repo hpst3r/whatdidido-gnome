@@ -239,17 +239,46 @@ async function main() {
             ['Remote session']);
     }
 
-    // setTitleRules: applies to the next send; problems logged once.
+    // setTitleRules: applies to the next send. A setting with an entry that
+    // can't be used blanks every title (fail closed) until it is fixed,
+    // logged once per distinct bad setting, by rule number, never its text.
+    const BAD = [['', '*Other*', 'OTHER'], ['', '*', 'LBL']];
     h = harness();
     await h.start();
-    h.r.setTitleRules([['', '*FPS*', ''], ['', '*', 'LBL'], ['', '', 'x']]);
+    h.r.setTitleRules(BAD);
     await h.advance(SETTLE_MS + SPACING_MS);
-    eq('new rules: the current window is re-sent blanked', h.titles(), ['Remote 30 FPS', '']);
-    h.r.setTitleRules([['', '*FPS*', ''], ['', '*', 'LBL'], ['', '', 'x']]);
+    eq('fail closed: the current window is re-sent with an empty title', h.titles(), ['Remote 30 FPS', '']);
+    await h.title('Settings');
+    eq('fail closed: other titles stay empty', h.titles(), ['Remote 30 FPS', '']);
+    eq('fail closed: logged once, naming the rule, not its text',
+        [h.logs.length, /rule 2/.test(h.logs[0]), h.logs.some(m => /LBL|OTHER|Other/.test(m))], [1, true, false]);
+    h.r.setTitleRules(BAD.map(e => [...e]));
     await h.advance(SETTLE_MS + SPACING_MS);
-    eq('ignored rules are logged once each, without their text', [h.logs.length, h.logs.every(m => !m.includes('LBL'))],
-        [2, true]);
-    eq('a log line names the rule number', /rule 2/.test(h.logs[0]), true);
+    eq('fail closed: the same bad setting again is not logged again', h.logs.length, 1);
+    h.r.setTitleRules([['', '', 'x']]);
+    await h.advance(SETTLE_MS + SPACING_MS);
+    eq('fail closed: another bad setting is logged', [h.logs.length, /rule 1/.test(h.logs[1])], [2, true]);
+    h.r.setTitleRules([['', '', 'y']]);
+    await h.advance(SETTLE_MS + SPACING_MS);
+    eq('fail closed: so is one with the same problem but other text', h.logs.length, 3);
+    h.r.setTitleRules([BAD[0]]);
+    await h.advance(SETTLE_MS + SPACING_MS);
+    eq('fixed: titles are sent again, nothing logged', [h.titles().at(-1), h.logs.length], ['Settings', 3]);
+    h.r.setTitleRules(Array.from({length: 101}, (_, i) => ['', `t${i}`, '']));
+    await h.advance(SETTLE_MS + SPACING_MS);
+    eq('fail closed: more than 100 rules', [h.titles().at(-1), h.logs.length, /101/.test(h.logs.at(-1))],
+        ['', 4, true]);
+    h.r.setTitleRules([]);
+    await h.advance(SETTLE_MS + SPACING_MS);
+    eq('no rules: titles are sent', h.titles().at(-1), 'Settings');
+
+    h = harness({titleRules: [['', '', '']]});
+    await h.start();
+    eq('fail closed from the constructor too', [h.titles(), h.logs.length], [[''], 1]);
+    h = harness({titleRules: [['', 'nothing', '']]});
+    h.focus = {...RAW, title: 'x'.repeat(5000)};
+    await h.start();
+    eq('a title over 4096 characters is sent empty while rules are set', h.titles(), ['']);
 }
 
 await main();

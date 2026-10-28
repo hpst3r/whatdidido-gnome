@@ -1,15 +1,19 @@
 // Run: gjs -m tests/window_title_rules_test.js
 // Window title rules (whatdidido TIME_ACCOUNTING.md "Later": title rules):
 // (app, pattern, label) entries whose case-insensitive glob over the whole
-// title replaces it with the label before it leaves the shell, the prefs
-// parser that refuses empty and all-* patterns, and the counter rule
+// title replaces it with the label before it leaves the shell, failing
+// closed (every title empty) while the setting holds an entry that can't be
+// used or the title is too long to match, the prefs parser that refuses
+// empty and all-* patterns, and the counter rule
 // (sameCounter, the server's day_summary_evidence._same_title) the digit
 // filter uses.
+import GLib from 'gi://GLib';
 import System from 'system';
 
 import {
-    TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX, TITLE_MAX_CHARS, globMatch, compileTitleRules, applyTitleRules,
-    titleRuleProblem, parseTitleRules, formatTitleRules, sameCounter, counterTick, windowPayload,
+    TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX, TITLE_RULE_MATCH_MAX, TITLE_MAX_CHARS, globMatch, compileTitleRules,
+    applyTitleRules, titleRuleProblem, titleEntryProblem, parseTitleRule, formatTitleRules, sameCounter, counterTick,
+    windowPayload,
 } from '../whatdidido@wporter.org/lib/window_model.js';
 
 let failed = 0;
@@ -23,7 +27,7 @@ function eq(name, got, want) {
     }
 }
 
-eq('caps', [TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX], [100, 200]);
+eq('caps', [TITLE_RULES_MAX, TITLE_RULE_FIELD_MAX, TITLE_RULE_MATCH_MAX], [100, 200, 4096]);
 
 // --- globMatch ----------------------------------------------------------------------
 eq('* any run, whole title', [
@@ -99,22 +103,30 @@ eq('long literal across word boundaries', [
 
 // --- adversarial performance ----------------------------------------------------------
 // A catastrophic-backtracking shape for regex engines: 100 rules of 200
-// characters (the caps) against a 100 000-character title.
+// characters (the caps) against the longest title that is matched (4096
+// characters). One title change runs this once in the shell's main loop: it
+// has to fit well inside a 16 ms frame. Best of 5, against machine noise.
 const evilPattern = '*a'.repeat(99) + '*b';
 eq('adversarial pattern is at the cap', [...evilPattern].length, TITLE_RULE_FIELD_MAX);
-const evilTitle = 'a'.repeat(100000);
 const evilRules = compileTitleRules(Array.from({length: TITLE_RULES_MAX}, (_, i) =>
     ['', i % 2 ? evilPattern : `${'a?'.repeat(99)}b*`, 'x'])).rules;
-let start = Date.now();
-eq('adversarial: no rule matches', applyTitleRules(evilTitle, '', '', evilRules), evilTitle);
-let elapsed = Date.now() - start;
-print(`     adversarial: 100 rules x 100000 chars in ${elapsed} ms`);
-eq('adversarial: 100 capped rules over a 100k title stay under 2 s', elapsed < 2000, true);
-start = Date.now();
-eq('adversarial: a single rule over a 100k title', globMatch(evilPattern, evilTitle), false);
-elapsed = Date.now() - start;
-print(`     adversarial: one rule in ${elapsed} ms`);
-eq('adversarial: one rule under 100 ms', elapsed < 100, true);
+const best = fn => {
+    let ms = Infinity, result;
+    for (let i = 0; i < 5; i++) {
+        const start = GLib.get_monotonic_time();
+        result = fn();
+        ms = Math.min(ms, (GLib.get_monotonic_time() - start) / 1000);
+    }
+    return [result, ms];
+};
+const evilTitle = 'a'.repeat(TITLE_RULE_MATCH_MAX);
+let [result, elapsed] = best(() => applyTitleRules(evilTitle, '', '', evilRules));
+eq('adversarial: no rule matches', result, evilTitle);
+print(`     adversarial: ${TITLE_RULES_MAX} rules x ${TITLE_RULE_FIELD_MAX} chars on a ${TITLE_RULE_MATCH_MAX}-char title in ${elapsed.toFixed(2)} ms`);
+eq('adversarial: the caps fit well inside a frame (under 8 ms)', elapsed < 8, true);
+[result, elapsed] = best(() => applyTitleRules('a'.repeat(1000000), '', '', evilRules));
+print(`     adversarial: a 1000000-char title in ${elapsed.toFixed(2)} ms`);
+eq('adversarial: a longer title is not matched at all, just emptied (under 8 ms)', [result, elapsed < 8], ['', true]);
 
 // --- rule validation -----------------------------------------------------------------
 const long = 'x'.repeat(TITLE_RULE_FIELD_MAX + 1);
@@ -132,16 +144,38 @@ eq('allowed: exactly 200 characters, counted in code points',
 eq('refused: non-string fields', typeof titleRuleProblem('', 5, ''), 'string');
 
 // --- compileTitleRules (the model side: hand-edited dconf) ------------------------------
+// One entry the model can't use and every title is sent empty (fail
+// closed): the rule meant to hide a title must never be skipped silently.
+const blank = entries => applyTitleRules('Terminal', 'org.gnome.Ptyxis.desktop', 'ptyxis',
+    compileTitleRules(entries).rules);
+eq('compile: valid rules leave other titles alone', blank([['', '*q*', 'Q'], ['x', '*b*', 'B']]), 'Terminal');
+eq('compile: no rules leave titles alone', [blank([]), blank(undefined)], ['Terminal', 'Terminal']);
+eq('fail closed: an empty pattern', blank([['', '*z*', 'Z'], ['', '', 'empty']]), '');
+eq('fail closed: an all-* pattern', blank([['', '**', 'all']]), '');
+eq('fail closed: a pattern or a label over 200 characters', [blank([['', long, '']]), blank([['', 'q', long]])],
+    ['', '']);
+eq('fail closed: not (app, pattern, label)', [blank([['x', 'y']]), blank(['junk']), blank([['', 5, '']]),
+    blank([['', 'y', 'z', 'w']])], ['', '', '', '']);
+eq('fail closed: not a list', [blank(null), blank('junk'), blank({})], ['', '', '']);
+eq('fail closed: more than 100 rules', [
+    blank(Array.from({length: TITLE_RULES_MAX}, (_, i) => ['', `t${i}`, `L${i}`])),
+    blank(Array.from({length: TITLE_RULES_MAX + 1}, (_, i) => ['', `t${i}`, `L${i}`])),
+], ['Terminal', '']);
+eq('fail closed: the valid rules\' labels are not used either',
+    applyTitleRules('secret', '', '', compileTitleRules([['', 'secret', 'S'], ['', '', '']]).rules), '');
 let compiled = compileTitleRules([['', '*a*', 'A'], ['', '', 'empty'], ['', '*', 'all'], ['', long, ''],
     ['x', 'y'], 'junk', ['', '*b*', 'B']]);
-eq('compile: invalid entries are dropped', compiled.rules.map(r => r.label), ['A', 'B']);
-eq('compile: one problem per dropped entry, numbered from 1, never the pattern text',
-    [compiled.problems.length, compiled.problems.every(m => !m.includes(long)), !!compiled.problems[0]?.includes('2')],
-    [5, true, true]);
+eq('compile: one problem per bad entry, numbered from 1, never the entry text',
+    [compiled.problems.length, compiled.problems.every(m => !m.includes(long) && !m.includes('empty')),
+        compiled.problems.map(m => m.match(/^rule (\d+):/)?.[1])],
+    [5, true, ['2', '3', '4', '5', '6']]);
 compiled = compileTitleRules(Array.from({length: TITLE_RULES_MAX + 5}, (_, i) => ['', `t${i}`, `L${i}`]));
-eq('compile: at most 100 rules', [compiled.rules.length, compiled.rules.at(-1)?.label, compiled.problems.length],
-    [TITLE_RULES_MAX, `L${TITLE_RULES_MAX - 1}`, 1]);
-eq('compile: not an array -> no rules', compileTitleRules(null).rules, []);
+eq('compile: too many rules is one problem with the count', [compiled.problems.length,
+    /100/.test(compiled.problems[0]), /105/.test(compiled.problems[0])], [1, true, true]);
+eq('compile: valid setting, no problems', compileTitleRules([['', 'a', '']]).problems, []);
+eq('entry problem: the 101st entry', [titleEntryProblem(['', 'a', ''], TITLE_RULES_MAX - 1),
+    typeof titleEntryProblem(['', 'a', ''], TITLE_RULES_MAX), typeof titleEntryProblem(['', ''], 0)],
+[null, 'string', 'string']);
 
 // --- applyTitleRules ---------------------------------------------------------------------
 const rules = compileTitleRules([
@@ -176,34 +210,46 @@ eq('payload: blanked', windowPayload(raw('Bob - Discord', 'x.desktop', 'x'), [],
 eq('payload: excluded app wins (empty, not the label)',
     windowPayload(raw('Bob - Discord'), ['org.mozilla.firefox'], {rules}).title, '');
 eq('payload: no rules -> the title', windowPayload(raw('Bob - Discord')).title, 'Bob - Discord');
-const longTitle = 'p'.repeat(5000) + ' - Discord';
+const longTitle = 'p'.repeat(TITLE_RULE_MATCH_MAX - 10) + ' - Discord';
 eq('payload: rules see the raw title before truncation',
     [windowPayload(raw(longTitle), [], {rules}).title, [...windowPayload(raw(longTitle)).title].length],
     ['Discord (private)', TITLE_MAX_CHARS]);
+eq('payload: fail closed: one bad entry blanks every title',
+    windowPayload(raw('Terminal'), [], {rules: compileTitleRules([['', '*Discord*', 'D'], ['', '', '']]).rules}).title,
+    '');
+
+// --- titles too long to match (fail closed) ---------------------------------------------
+const otherApp = compileTitleRules([['com.example.Other', 'zzz', 'Z']]).rules;
+eq('match bound: 4096 code points are matched, 4097 are emptied, whatever the rule', [
+    applyTitleRules('a'.repeat(TITLE_RULE_MATCH_MAX), 'x.desktop', 'x', otherApp) === 'a'.repeat(TITLE_RULE_MATCH_MAX),
+    applyTitleRules('a'.repeat(TITLE_RULE_MATCH_MAX + 1), 'x.desktop', 'x', otherApp),
+], [true, '']);
+eq('match bound: counted in code points (astral emoji)', [
+    applyTitleRules('😀'.repeat(TITLE_RULE_MATCH_MAX), '', '', otherApp).length,
+    applyTitleRules('😀'.repeat(TITLE_RULE_MATCH_MAX + 1), '', '', otherApp),
+], [2 * TITLE_RULE_MATCH_MAX, '']);
+eq('match bound: no rules, no bound (just shortened)',
+    [...windowPayload(raw('q'.repeat(TITLE_RULE_MATCH_MAX + 1))).title].length, TITLE_MAX_CHARS);
+eq('match bound: a rule that would match past the bound still empties',
+    windowPayload(raw('p'.repeat(TITLE_RULE_MATCH_MAX) + ' - Discord'), [], {rules}).title, '');
 eq('payload: the label is sanitized like a title', windowPayload(raw('t'), [],
     {rules: compileTitleRules([['', 't', 'a\tb']]).rules}).title, 'a b');
 
-// --- prefs parser ---------------------------------------------------------------------
-let parsed = parseTitleRules([
-    {app: ' firefox ', pattern: '*Discord*', label: 'Discord'},
-    {app: '', pattern: '', label: ''},
-    {app: '', pattern: '**', label: 'x'},
-    {app: '', pattern: long, label: ''},
-    {app: '', pattern: 'a', label: long},
-    {app: '', pattern: ' *Mail* ', label: ''},
-]);
-eq('parse: valid rows saved (app trimmed, pattern and label kept)', parsed.rules,
-    [['firefox', '*Discord*', 'Discord'], ['', ' *Mail* ', '']]);
-eq('parse: one error per refused row, null for good rows',
-    parsed.errors.map(e => (e === null ? null : typeof e)), [null, 'string', 'string', 'string', 'string', null]);
-eq('parse: all-* refusal says why', /every title/.test(parsed.errors[2]), true);
-parsed = parseTitleRules(Array.from({length: TITLE_RULES_MAX + 2}, (_, i) => ({app: '', pattern: `p${i}`, label: ''})));
-eq('parse: rows past 100 are refused', [parsed.rules.length, parsed.errors.filter(Boolean).length],
-    [TITLE_RULES_MAX, 2]);
-eq('parse: missing fields are empty', parseTitleRules([{pattern: 'x'}]).rules, [['', 'x', '']]);
+// --- prefs parser (one row) -------------------------------------------------------------
+const row = (app, pattern, label, i = 0) => parseTitleRule({app, pattern, label}, i);
+eq('parse: valid row (app trimmed, pattern and label kept)', [row(' firefox ', '*Discord*', 'Discord'),
+    row('', ' *Mail* ', '')], [{rule: ['firefox', '*Discord*', 'Discord'], problem: null},
+    {rule: ['', ' *Mail* ', ''], problem: null}]);
+eq('parse: refused rows have a problem',
+    [row('', '', ''), row('', '**', 'x'), row('', long, ''), row('', 'a', long)].map(r => typeof r.problem),
+    ['string', 'string', 'string', 'string']);
+eq('parse: all-* refusal says why', /every title/.test(row('', '**', 'x').problem), true);
+eq('parse: row 101 is refused', [row('', 'p', '', TITLE_RULES_MAX - 1).problem,
+    typeof row('', 'p', '', TITLE_RULES_MAX).problem], [null, 'string']);
+eq('parse: missing fields are empty', parseTitleRule({pattern: 'x'}, 0).rule, ['', 'x', '']);
 eq('format: settings tuples -> rows', formatTitleRules([['a', 'b', 'c']]), [{app: 'a', pattern: 'b', label: 'c'}]);
-eq('format then parse round-trips', parseTitleRules(formatTitleRules([['a', '*b*', ''], ['', 'c?', 'd']])).rules,
-    [['a', '*b*', ''], ['', 'c?', 'd']]);
+eq('format then parse round-trips', formatTitleRules([['a', '*b*', ''], ['', 'c?', 'd']]).map(parseTitleRule)
+    .map(r => r.rule), [['a', '*b*', ''], ['', 'c?', 'd']]);
 
 // --- sameCounter (day_summary_evidence._same_title, collapse_digits=True) -------------
 eq('counter: equal', [sameCounter('a', 'a'), sameCounter('', '')], [true, true]);
