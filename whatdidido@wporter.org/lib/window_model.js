@@ -104,6 +104,203 @@ export function isExcluded(appId, excluded) {
     return (excluded ?? []).some(e => typeof e === 'string' && e.trim() !== '' && bareId(e) === id);
 }
 
+// --- title rules (whatdidido TIME_ACCOUNTING.md "Later": title rules) -------
+// window-title-rules entries are [app, pattern, label]. The focused window's
+// title becomes the label of the first rule whose app matches ('' = any app;
+// otherwise the app id like an exclusion, with or without ".desktop", or the
+// WM class, case-insensitively) and whose pattern matches the whole title.
+// Patterns are case-insensitive globs: '*' any run, '?' one character,
+// everything else literal (no escapes, no [classes]). No RegExp is ever built
+// from them: the matcher runs in the shell's main loop.
+export const TITLE_RULES_MAX = 100;
+export const TITLE_RULE_FIELD_MAX = 200;
+
+const fold = ch => ch.toLowerCase();
+
+// A bit-parallel NFA (Shift-And) over the pattern's positions: bit j is "the
+// first j pattern characters matched", a '*' bit also stays set on any
+// character and sets the next bit without consuming one. One pass over the
+// title, O(title × pattern / 32), never backtracking.
+function compileGlob(pattern) {
+    const tokens = [];
+    for (const ch of pattern) {
+        if (ch !== '*' || tokens.at(-1) !== '*')
+            tokens.push(ch === '*' || ch === '?' ? ch : fold(ch));
+    }
+    const size = tokens.length;
+    const words = (size >> 5) + 1;  // bits 0..size; bit size = accept
+    const star = new Uint32Array(words), any = new Uint32Array(words);
+    tokens.forEach((t, j) => {
+        if (t === '*')
+            star[j >> 5] |= 1 << (j & 31);
+        else if (t === '?')
+            any[j >> 5] |= 1 << (j & 31);
+    });
+    const masks = new Map();  // folded character -> the bits it advances
+    tokens.forEach((t, j) => {
+        if (t === '*' || t === '?')
+            return;
+        if (!masks.has(t))
+            masks.set(t, Uint32Array.from(any));
+        masks.get(t)[j >> 5] |= 1 << (j & 31);
+    });
+    return {size, words, star, any, masks, tailStar: tokens.at(-1) === '*'};
+}
+
+// A set '*' bit also sets the next one (never a '*': runs are collapsed).
+function starClosure(state, star) {
+    let carry = 0;
+    for (let w = 0; w < state.length; w++) {
+        const s = state[w] & star[w];
+        state[w] |= (s << 1) | carry;
+        carry = s >>> 31;
+    }
+}
+
+// chars: the title's folded code points.
+function globMatches(glob, chars) {
+    const {size, words, star, any, masks, tailStar} = glob;
+    const acceptWord = size >> 5, acceptBit = size & 31;
+    let state = new Uint32Array(words), next = new Uint32Array(words);
+    state[0] = 1;
+    starClosure(state, star);
+    for (const ch of chars) {
+        // A trailing '*' keeps an accepted title accepted.
+        if (tailStar && (state[acceptWord] >>> acceptBit) & 1)
+            return true;
+        const mask = masks.get(ch) ?? any;
+        let carry = 0, alive = 0;
+        for (let w = 0; w < words; w++) {
+            const s = state[w], advance = s & mask[w];
+            next[w] = (advance << 1) | carry | (s & star[w]);
+            carry = advance >>> 31;
+            alive |= next[w];
+        }
+        if (!alive)
+            return false;
+        starClosure(next, star);
+        const swap = state;
+        state = next;
+        next = swap;
+    }
+    return ((state[acceptWord] >>> acceptBit) & 1) === 1;
+}
+
+// Rules match the title as it would be sent (control characters as
+// spaces), but whole: before sanitizeWindow() shortens it.
+function foldedTitle(title) {
+    return Array.from(String(title).toWellFormed().replace(CONTROL_RE, ' '), fold);
+}
+
+export function globMatch(pattern, text) {
+    return globMatches(compileGlob(String(pattern)), foldedTitle(text));
+}
+
+// Why a rule can't be used (shown in Settings, logged by the extension), or
+// null. Lengths are in characters (code points).
+export function titleRuleProblem(app, pattern, label) {
+    if (![app, pattern, label].every(v => typeof v === 'string'))
+        return 'App, pattern and label must be text';
+    if (pattern === '')
+        return 'The pattern is empty';
+    if (/^\*+$/.test(pattern))
+        return 'A pattern of only * would hide every title (turn off Record active window instead)';
+    if ([...pattern].length > TITLE_RULE_FIELD_MAX)
+        return `The pattern is longer than ${TITLE_RULE_FIELD_MAX} characters`;
+    if ([...label].length > TITLE_RULE_FIELD_MAX)
+        return `The label is longer than ${TITLE_RULE_FIELD_MAX} characters`;
+    return null;
+}
+
+// The settings value as matchers. Entries Settings would refuse (possible
+// through dconf) and entries past TITLE_RULES_MAX are left out; problems
+// name them by number, never by their text.
+export function compileTitleRules(entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    const rules = [], problems = [];
+    list.slice(0, TITLE_RULES_MAX).forEach((entry, i) => {
+        const problem = Array.isArray(entry) && entry.length === 3
+            ? titleRuleProblem(...entry) : 'Not an (app, pattern, label) entry';
+        if (problem)
+            problems.push(`title rule ${i + 1} ignored: ${problem}`);
+        else
+            rules.push({app: entry[0].trim(), glob: compileGlob(entry[1]), label: entry[2]});
+    });
+    if (list.length > TITLE_RULES_MAX)
+        problems.push(`only the first ${TITLE_RULES_MAX} of ${list.length} title rules are used`);
+    return {rules, problems};
+}
+
+function ruleApplies(app, appId, wmClass) {
+    if (app === '')
+        return true;
+    return (!!appId && bareId(app) === bareId(appId)) ||
+        (!!wmClass && app.toLowerCase() === wmClass.trim().toLowerCase());
+}
+
+// The label of the first matching compileTitleRules() rule, else the title.
+export function applyTitleRules(title, appId, wmClass, rules) {
+    if (!rules?.length)
+        return title;
+    const chars = foldedTitle(title);
+    for (const rule of rules) {
+        if (ruleApplies(rule.app, appId, wmClass) && globMatches(rule.glob, chars))
+            return rule.label;
+    }
+    return title;
+}
+
+// Settings rows ({app, pattern, label}) -> the settings value, and one error
+// (or null) per row. Refused rows are not saved.
+export function parseTitleRules(rows) {
+    const rules = [], errors = [];
+    for (const row of rows) {
+        const app = String(row?.app ?? '').trim(), pattern = String(row?.pattern ?? ''),
+            label = String(row?.label ?? '');
+        const problem = rules.length >= TITLE_RULES_MAX
+            ? `At most ${TITLE_RULES_MAX} rules are used` : titleRuleProblem(app, pattern, label);
+        errors.push(problem);
+        if (!problem)
+            rules.push([app, pattern, label]);
+    }
+    return {rules, errors};
+}
+
+export function formatTitleRules(list) {
+    return list.map(([app, pattern, label]) => ({app, pattern, label}));
+}
+
+// --- digit-only title changes (TIME_ACCOUNTING.md "Later") ---------------------
+// The server's counter rule (day_summary_evidence._same_title): a title split
+// around its ASCII digit runs has text at even, digit runs at odd indices.
+const DIGIT_RUNS = /([0-9]+)/;
+// The longest digit run whose change still counts as a counter.
+export const COUNTER_MAX_DIGITS = 3;
+
+// Whether title repeats last: equal, or a counter tick that changes only
+// digit runs of at most COUNTER_MAX_DIGITS on both sides ("30 FPS" -> "31
+// FPS", "(9) Chat" -> "(10) Chat"); a ticket number (#20591 -> #20592) is
+// a change.
+export function sameCounter(last, title) {
+    if (last === title)
+        return true;
+    const before = last.split(DIGIT_RUNS), after = title.split(DIGIT_RUNS);
+    if (before.length !== after.length)
+        return false;
+    return before.every((old, i) => old === after[i] ||
+        (i % 2 === 1 && Math.max(old.length, after[i].length) <= COUNTER_MAX_DIGITS));
+}
+
+// Whether payload is last with only a counter ticked in its title: the same
+// window fields and monitors (changed_at aside).
+export function counterTick(payload, last) {
+    if (payload?.focus !== 'window' || last?.focus !== 'window')
+        return false;
+    return payload.app_id === last.app_id && payload.app_name === last.app_name &&
+        payload.wm_class === last.wm_class && JSON.stringify(payload.monitors) === JSON.stringify(last.monitors) &&
+        sameCounter(last.title, payload.title);
+}
+
 // --- window geometry (AT_REST_GUARD.md section 6) ---------------------------
 // Rectangles are [x, y, w, h] arrays; the shell's are Mtk.Rectangle-like
 // {x, y, width, height}, all in logical layout coordinates.
@@ -166,7 +363,9 @@ export function rfc3339(ms) {
 // only then are monitors (when non-empty; none means "unknown") and
 // changed_at (ms since the epoch, when known) added. seen: monitor sets
 // already seen in this burst (AT_REST_GUARD.md A2.3), added to the window's.
-export function windowPayload(raw, excluded = [], {geometry = false, changedAt = null, seen = []} = {}) {
+// rules: compileTitleRules() rules, applied to the whole raw title (an
+// excluded app's title is empty whatever the rules).
+export function windowPayload(raw, excluded = [], {geometry = false, changedAt = null, seen = [], rules = []} = {}) {
     if (!raw)
         return {focus: 'none'};
     const str = v => (typeof v === 'string' ? v : '');
@@ -178,7 +377,7 @@ export function windowPayload(raw, excluded = [], {geometry = false, changedAt =
         app_id: appId,
         app_name: str(raw.appName),
         wm_class: str(raw.wmClass),
-        title: isExcluded(appId, excluded) ? '' : str(raw.title),
+        title: isExcluded(appId, excluded) ? '' : applyTitleRules(str(raw.title), appId, str(raw.wmClass), rules),
     };
     if (geometry) {
         const monitors = unionMonitors(windowMonitors(raw.frame, raw.layout), seen);
@@ -265,6 +464,11 @@ export function formatExcludedApps(list) {
 //   (a start, resume or recovery, seen or not by the polls), a paused ->
 //   recording edge, and a changed window_activity.geometry (the keys the
 //   session accepts changed).
+// - Title rules (setTitleRules) replace the title before anything else; with
+//   ignoreDigitChanges, a payload that is the last one sent with only a
+//   counter ticked in its title (counterTick) is not sent while recording,
+//   unless its burst holds a focus change (changed(true)). Re-sends, retries
+//   (nothing sent to compare with) and paused reports always go out.
 // - monitors and changed_at are added only while the last poll showed
 //   window_activity.geometry === true. Dedupe ignores changed_at.
 // - A burst is the changed() calls while active up to the payload built
@@ -294,13 +498,15 @@ export function formatExcludedApps(list) {
 // reporting off until the next poll.
 export class WindowReporter {
     constructor({now, wallNow = () => Date.now(), setTimer, clearTimer, readFocus, send, log = () => {},
-        onUnavailable = () => {}, enabled = true, excluded = [], settleMs = SETTLE_MS, spacingMs = SPACING_MS,
-        retryMinMs = RETRY_MIN_MS, retryMaxMs = RETRY_MAX_MS}) {
+        onUnavailable = () => {}, enabled = true, excluded = [], titleRules = [], ignoreDigitChanges = false,
+        settleMs = SETTLE_MS, spacingMs = SPACING_MS, retryMinMs = RETRY_MIN_MS, retryMaxMs = RETRY_MAX_MS}) {
         Object.assign(this, {_now: now, _wallNow: wallNow, _setTimer: setTimer, _clearTimer: clearTimer,
             _readFocus: readFocus, _send: send, _log: log, _onUnavailable: onUnavailable, _settleMs: settleMs, _spacingMs: spacingMs,
             _retryMinMs: retryMinMs, _retryMaxMs: retryMaxMs});
         this._enabled = !!enabled;
         this._excluded = excluded;
+        this._rules = [];           // compileTitleRules() rules
+        this._ignoreDigits = !!ignoreDigitChanges;
         this._eligible = false;
         this._unavailable = false;
         this._destroyed = false;
@@ -310,7 +516,7 @@ export class WindowReporter {
         this._geometry = false;     // window_activity.geometry of the last poll
         this._recording = false;    // the last poll showed state "recording"
         this._changedAt = wallNow(); // wall-clock ms of the last change signal
-        this._burst = null;         // unsent changes while active: {since, monitors}
+        this._burst = null;         // unsent changes while active: {since, monitors, focus}
         this._lastSendAt = -Infinity;
         this._settleTimer = null;
         this._spacingTimer = null;
@@ -320,6 +526,7 @@ export class WindowReporter {
         this._inFlight = false;
         this._pending = false;
         this._logged = new Set();   // insertion order: oldest first
+        this._setRules(titleRules);
     }
 
     get active() {
@@ -353,12 +560,19 @@ export class WindowReporter {
         }
     }
 
-    setTitleRules() {}
-
-    setIgnoreDigitChanges() {}
-
     setExcluded(list) {
         this._excluded = list;
+        this.changed();
+    }
+
+    // The window-title-rules value ([app, pattern, label] entries).
+    setTitleRules(entries) {
+        this._setRules(entries);
+        this.changed();
+    }
+
+    setIgnoreDigitChanges(on) {
+        this._ignoreDigits = !!on;
         this.changed();
     }
 
@@ -383,13 +597,15 @@ export class WindowReporter {
             this._offPending = false;
     }
 
-    // Focus, title, wm-class or the focused window's monitor set changed.
-    // Stamped even while inactive: becoming active sends it with this time.
-    changed() {
+    // Focus (focus true), title, wm-class or the focused window's monitor
+    // set changed. Stamped even while inactive: becoming active sends it
+    // with this time.
+    changed(focus = false) {
         this._changedAt = this._wallNow();
         if (!this.active)
             return;
-        this._burst ??= {since: this._changedAt, monitors: []};
+        this._burst ??= {since: this._changedAt, monitors: [], focus: false};
+        this._burst.focus ||= focus;
         if (this._geometry)
             this._burst.monitors = unionMonitors(this._burst.monitors, this._currentMonitors(this._readFocus()));
         this._clear('_settleTimer');
@@ -403,6 +619,13 @@ export class WindowReporter {
         this._clear('_settleTimer');
         this._clear('_spacingTimer');
         this._clear('_retryTimer');
+    }
+
+    _setRules(entries) {
+        const {rules, problems} = compileTitleRules(entries);
+        this._rules = rules;
+        for (const problem of problems)
+            this._logOnce(`whatdidido: ${problem}`);
     }
 
     _armSettle() {
@@ -478,15 +701,19 @@ export class WindowReporter {
         const burst = this._burst;
         this._burst = null;
         const payload = windowPayload(raw, this._excluded,
-            {geometry: this._geometry, changedAt: burst?.since ?? this._changedAt, seen: burst?.monitors});
+            {geometry: this._geometry, changedAt: burst?.since ?? this._changedAt, seen: burst?.monitors,
+                rules: this._rules});
         if (payload.monitors) {
             const current = this._currentMonitors(raw);
             if (!sameMonitors(payload.monitors, current)) {
-                this._burst = {since: this._wallNow(), monitors: current};
+                this._burst = {since: this._wallNow(), monitors: current, focus: false};
                 this._armSettle();
             }
         }
         if (samePayload(payload, this._last))
+            return;
+        // An FPS counter in the title: the window's first title stands.
+        if (this._ignoreDigits && this._recording && !burst?.focus && counterTick(payload, this._last))
             return;
         this._post(payload, burst);
     }
@@ -630,30 +857,3 @@ export class MonitorSet {
     }
 }
 
-// --- STUBS (RED) ---
-export const TITLE_RULES_MAX = 0;
-export const TITLE_RULE_FIELD_MAX = 0;
-export function globMatch() {
-    return false;
-}
-export function titleRuleProblem() {
-    return null;
-}
-export function compileTitleRules() {
-    return {rules: [], problems: []};
-}
-export function applyTitleRules(title) {
-    return title;
-}
-export function parseTitleRules() {
-    return {rules: [], errors: []};
-}
-export function formatTitleRules() {
-    return [];
-}
-export function sameCounter(a, b) {
-    return a === b;
-}
-export function counterTick() {
-    return false;
-}

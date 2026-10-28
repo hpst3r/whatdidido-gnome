@@ -42,6 +42,16 @@
       <summary>Apps whose window titles are never sent</summary>
       <description>Desktop app ids (with or without the .desktop suffix, e.g. org.keepassxc.KeePassXC). Their windows are reported with an empty title.</description>
     </key>
+    <key name="window-title-rules" type="a(sss)">
+      <default>[]</default>
+      <summary>Window title rules: (app, pattern, label)</summary>
+      <description>Before a window title is sent, the first rule whose app and pattern match replaces the whole title with its label (an empty label sends an empty title). app: empty for any app, otherwise a desktop app id (with or without .desktop, compared exactly) or a WM class (compared case-insensitively). pattern: a case-insensitive glob over the whole title, * for any text, ? for one character, everything else literal (e.g. *Discord*). An empty pattern or one of only * is ignored, as are rules past the 100th and patterns or labels over 200 characters. Rules are applied to the full title, before it is shortened. Apps in window-title-excluded-apps are still sent with an empty title. Rules change only the window data the extension sends, not screenshots.</description>
+    </key>
+    <key name="window-title-ignore-digit-changes" type="b">
+      <default>true</default>
+      <summary>Don't report title changes that only tick a counter</summary>
+      <description>While recording, a title change of the same window that only changes numbers of at most 3 digits (an FPS counter, "(9) Chat" → "(10) Chat") compared with the last report sent is not reported, so the first title stands. Longer numbers (a ticket number) always count. Focus changes, the re-send after a start, resume or reconnect, retries and reports while paused are always sent.</description>
+    </key>
     <key name="pause-reminder-minutes" type="u">
       <range min="0" max="240"/>
       <default>10</default>

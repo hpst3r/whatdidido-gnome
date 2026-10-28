@@ -53,6 +53,7 @@ function harness(opts = {}) {
             return h.reply(p);
         },
         log: m => h.logs.push(m),
+        ignoreDigitChanges: true,   // the setting's default (the reporter's is off)
         ...opts,
     });
     h.advance = async ms => {

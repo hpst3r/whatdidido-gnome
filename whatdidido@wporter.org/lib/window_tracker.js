@@ -3,7 +3,7 @@ import GLib from 'gi://GLib';
 import {FocusWatch, MonitorSet, WindowReporter, windowMonitors} from './window_model.js';
 
 // Glue only: watches the focused window (focus, title, wm-class, position,
-// size), the monitor layout, the two settings, and GLib timers, and feeds
+// size), the monitor layout, the window settings, and GLib timers, and feeds
 // WindowReporter (window_model.js), which decides what is sent and when.
 // Frame rects and monitor geometries are both Mutter logical layout
 // coordinates (AT_REST_GUARD.md section 6).
@@ -42,6 +42,8 @@ export class WindowTracker {
             onUnavailable,
             enabled: settings.get_boolean('report-active-window'),
             excluded: settings.get_strv('window-title-excluded-apps'),
+            titleRules: settings.get_value('window-title-rules').deep_unpack(),
+            ignoreDigitChanges: settings.get_boolean('window-title-ignore-digit-changes'),
         });
 
         this._settingsIds = [
@@ -49,6 +51,10 @@ export class WindowTracker {
                 () => this._reporter.setEnabled(settings.get_boolean('report-active-window'))),
             settings.connect('changed::window-title-excluded-apps',
                 () => this._reporter.setExcluded(settings.get_strv('window-title-excluded-apps'))),
+            settings.connect('changed::window-title-rules',
+                () => this._reporter.setTitleRules(settings.get_value('window-title-rules').deep_unpack())),
+            settings.connect('changed::window-title-ignore-digit-changes',
+                () => this._reporter.setIgnoreDigitChanges(settings.get_boolean('window-title-ignore-digit-changes'))),
         ];
         // Title/wm-class/position/size signals follow the focused window
         // only. A move, resize or layout change is reported only when it
@@ -104,7 +110,7 @@ export class WindowTracker {
     _onFocus() {
         this._focusWatch.watch(this._display.focus_window);
         this._monitorSet.reset();
-        this._reporter.changed();
+        this._reporter.changed(true);
     }
 
     destroy() {
