@@ -353,6 +353,10 @@ export class WindowReporter {
         }
     }
 
+    setTitleRules() {}
+
+    setIgnoreDigitChanges() {}
+
     setExcluded(list) {
         this._excluded = list;
         this.changed();
@@ -624,4 +628,32 @@ export class MonitorSet {
         this._monitors = next;
         this._onChange();
     }
+}
+
+// --- STUBS (RED) ---
+export const TITLE_RULES_MAX = 0;
+export const TITLE_RULE_FIELD_MAX = 0;
+export function globMatch() {
+    return false;
+}
+export function titleRuleProblem() {
+    return null;
+}
+export function compileTitleRules() {
+    return {rules: [], problems: []};
+}
+export function applyTitleRules(title) {
+    return title;
+}
+export function parseTitleRules() {
+    return {rules: [], errors: []};
+}
+export function formatTitleRules() {
+    return [];
+}
+export function sameCounter(a, b) {
+    return a === b;
+}
+export function counterTick() {
+    return false;
 }

@@ -23,6 +23,8 @@ test:
 	gjs -m tests/window_geometry_test.js
 	gjs -m tests/window_paused_test.js
 	gjs -m tests/window_burst_test.js
+	gjs -m tests/window_title_rules_test.js
+	gjs -m tests/window_digit_filter_test.js
 	gjs -m tests/window_tracker_test.js
 	gjs -m tests/client_test.js $(TEST_RUNTIME)
 	gjs -m tests/window_body_size_test.js $(TEST_RUNTIME)/body-size

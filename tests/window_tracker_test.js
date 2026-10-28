@@ -54,6 +54,7 @@ const monitorManager = emitter();
 const settings = emitter();
 settings.get_boolean = () => true;
 settings.get_strv = () => [];
+settings.get_value = () => ({deep_unpack: () => []});
 const apps = {get_window_app: () => ({get_id: () => 'a.desktop', get_name: () => 'A'})};
 const sent = [];
 
@@ -70,9 +71,9 @@ const tracker = new WindowTracker({
 let changes = 0;
 const reporter = tracker._reporter;
 const changed = reporter.changed.bind(reporter);
-reporter.changed = () => {
+reporter.changed = (...args) => {
     changes++;
-    changed();
+    changed(...args);
 };
 
 const FIVE = ['notify::title', 'notify::wm-class', 'position-changed', 'size-changed', 'unmanaged'];
@@ -138,6 +139,56 @@ a.emit('unmanaged');
 eq('unmanaged: the window is disconnected', a.signals(), []);
 t2.destroy();
 eq('destroy after unmanaged: nothing left', [display.signals(), monitorManager.signals(), a.signals()], [[], [], []]);
+
+// Title rules and the digit filter come from settings, and follow their changes.
+const keys = {'report-active-window': true, 'window-title-ignore-digit-changes': true,
+    'window-title-rules': [['a', '*secret*', 'hidden']]};
+const s3 = emitter();
+s3.get_boolean = k => keys[k];
+s3.get_strv = () => [];
+s3.get_value = k => ({deep_unpack: () => keys[k]});
+const sent3 = [];
+const c = fakeWindow('my secret 1', R(100, 100, 400, 300));
+const d = fakeWindow('my secret 2', R(100, 100, 400, 300));
+display.focus_window = c;
+const t3 = new WindowTracker({settings: s3, send: p => {
+    sent3.push(p.title);
+    return Promise.resolve({recorded: true});
+}, log: () => {}, onUnavailable: () => {}, apps, display, monitorManager});
+const timers = [];
+t3._reporter._setTimer = (ms, fn) => timers.push(fn);
+t3._reporter._clearTimer = () => {};
+t3._reporter._spacingMs = 0;
+const fire = async () => {
+    while (timers.length)
+        timers.shift()();
+    for (let i = 0; i < 20; i++)
+        await null;
+};
+t3.updateStatus({state: 'recording', window_activity: {available: true, recorded: 0, dropped: 0, epoch: 0}}, true);
+await fire();
+eq('tracker: rules from settings (wm_class "a" matches the app "a")', sent3, ['hidden']);
+keys['window-title-rules'] = [];
+s3.emit('changed::window-title-rules');
+await fire();
+eq('tracker: a rules change re-sends the current window', sent3, ['hidden', 'my secret 1']);
+c.title = 'my secret 7';
+c.emit('notify::title');
+await fire();
+eq('tracker: a digit-only title change is held (filter on from settings)', sent3.length, 2);
+keys['window-title-ignore-digit-changes'] = false;
+s3.emit('changed::window-title-ignore-digit-changes');
+await fire();
+eq('tracker: turning the filter off sends it', sent3.at(-1), 'my secret 7');
+keys['window-title-ignore-digit-changes'] = true;
+s3.emit('changed::window-title-ignore-digit-changes');
+await fire();
+display.focus_window = d;
+display.emit('notify::focus-window');
+await fire();
+eq('tracker: a focus change sends even a counter-alike title of the same app', sent3.at(-1), 'my secret 2');
+t3.destroy();
+eq('tracker: destroy disconnects the new settings too', s3.signals(), []);
 
 if (failed) {
     print(`${failed} failed`);
