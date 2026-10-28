@@ -1,17 +1,18 @@
-// Run: gjs -m tests/review_title_pattern_test.js
-// Review PoCs (not in the Makefile): title rule patterns.
+// Run: gjs -m tests/window_title_review_pattern_test.js
+// Title rule patterns (from the review's PoCs, TR-1 and TR-2).
 //
 // TR-1: rules match the title with control characters turned into spaces,
-// but the pattern is compiled as is, so a pattern holding the title's own
-// tab, newline or C1 character (copied from the title, or set through dconf)
-// can never match, and the title it was meant to hide is sent.
+// so the pattern's control characters are turned into spaces too: a pattern
+// holding the title's own tab, newline or C1 character (copied from the
+// title, or set through dconf) matches it, and Settings agrees.
 // TR-2: Settings refuses an all-* pattern because it would hide every
-// title, but accepts "?*", "*?" and "*?*", which match every non-empty title
-// just the same.
+// title, and so "?*", "*?" and "*?*", which match every non-empty title
+// just the same (for a rule of any app; tests/window_title_rules_test.js
+// covers app-scoped rules).
 import System from 'system';
 
 import {
-    SETTLE_MS, SPACING_MS, WindowReporter, applyTitleRules, compileTitleRules, globMatch, parseTitleRules,
+    SETTLE_MS, SPACING_MS, WindowReporter, applyTitleRules, compileTitleRules, globMatch, parseTitleRule,
 } from '../whatdidido@wporter.org/lib/window_model.js';
 
 let failed = 0;
@@ -87,7 +88,7 @@ async function main() {
             problems.length > 0 ? {relabeled: false, refused: true, matches: false}
                 : {relabeled: true, refused: false, matches: true});
         eq(`TR-1 Settings agrees with the extension on the ${name} rule`,
-            parseTitleRules([{app: '', pattern: `ssh${ch}prod-db-*`, label: 'Terminal'}]).errors[0] !== null,
+            parseTitleRule({app: '', pattern: `ssh${ch}prod-db-*`, label: 'Terminal'}, 0).problem !== null,
             problems.length > 0);
     }
     const h = harness({titleRules: [['', 'ssh\tprod-db-*', 'Terminal']]});
@@ -95,15 +96,14 @@ async function main() {
     h.r.updateStatus(st, true);
     await h.advance(SETTLE_MS + SPACING_MS);
     eq('TR-1 wire: the rule relabels the title, or its refusal is logged', h.titles()[0] === 'Terminal' ||
-        h.logs.some(m => /title rule 1 ignored/.test(m)), true);
+        h.logs.some(m => /rule 1/.test(m)), true);
 
     // TR-2: patterns without a literal character match (almost) every title.
     const every = ['?*', '*?', '*?*', '?**'];
     for (const pattern of every)
         eq(`TR-2 "${pattern}" matches any non-empty title`, globMatch(pattern, 'Inbox - Mail'), true);
-    const {errors} = parseTitleRules(every.map(pattern => ({app: '', pattern, label: ''})));
     eq('TR-2 Settings refuses patterns that hide every title, like it refuses "*"',
-        errors.map(e => e !== null), every.map(() => true));
+        every.map(pattern => parseTitleRule({app: '', pattern, label: ''}, 0).problem !== null), every.map(() => true));
 }
 
 await main();

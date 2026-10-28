@@ -24,6 +24,8 @@ test:
 	gjs -m tests/window_paused_test.js
 	gjs -m tests/window_burst_test.js
 	gjs -m tests/window_title_rules_test.js
+	gjs -m tests/window_title_review_pattern_test.js
+	gjs -m tests/window_title_review_log_test.js
 	gjs -m tests/window_digit_filter_test.js
 	gjs -m tests/window_tracker_test.js
 	mkdir -p $(TEST_RUNTIME)/schemas
