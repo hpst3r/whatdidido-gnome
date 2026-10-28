@@ -162,9 +162,9 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
             description: 'The first rule that matches replaces the window title before it is sent (an empty ' +
                 'label sends an empty title). Pattern: the whole title, case-insensitive, * for any text, ? for ' +
                 'one character, e.g. *Discord*. App: empty for every app, or an app id or WM class (a pattern of ' +
-                'only * and ? needs one: it matches every title). Press Enter ' +
-                'to save a rule. While a rule is invalid, or a title is longer than 4096 characters, every title ' +
-                'is sent empty. Rules only change what is sent as the window title, not screenshots.',
+                'only * and ? needs one: it matches every title). A rule is saved when you press Enter or leave ' +
+                'its field, and only once it is valid; until then the saved rule stays in use. While a saved ' +
+                'rule can\'t be used, or a title is longer than 4096 characters, every title is sent empty. Rules only change what is sent as the window title, not screenshots.',
         });
         const add = new Gtk.Button({icon_name: 'list-add-symbolic', tooltip_text: 'Add rule', valign: Gtk.Align.CENTER});
         add.add_css_class('flat');

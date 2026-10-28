@@ -228,6 +228,13 @@ quietly:
   send errors it logs once), naming the entries by number, never their text, and
   Settings marks the row ("Every window title is sent empty until this rule
   is fixed or removed").
+- **Wrong-typed values are the exception.** The setting's type is `a(sss)`.
+  `dconf write` doesn't check types: a value of another type (for example a
+  rule without its label, `[('', '*Bank*')]`, or a list of strings) is
+  silently ignored by GSettings, which then reports no rules at all, so
+  titles are sent unchanged. GSettings can't tell such a value from an unset
+  one. Edit rules in Settings or with `gsettings set`, which both check the
+  type.
 - With at least one rule set, a title longer than 4096 characters is sent
   empty rather than matched.
 

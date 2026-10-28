@@ -259,7 +259,9 @@ const NO_RULES = {list: [], ids: new Map(), closed: false};
 
 // The settings value as {rules, problems}. rules is for applyTitleRules();
 // with any problem (an entry Settings would refuse, possible through dconf,
-// or too many entries) it empties every title. problems name entries by
+// or too many entries) it empties every title. A dconf value of the wrong
+// GVariant type never gets here: GSettings drops it and reports the default
+// [] (README, "Wrong-typed values"). problems name entries by
 // number, never by their text.
 export function compileTitleRules(entries) {
     if (entries === undefined)
