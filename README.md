@@ -174,6 +174,57 @@ name, the WM class and the window title, or "no focused window".
 - The Active window tile is insensitive, with "Not enabled on the server",
   when the server doesn't offer it.
 
+### Title rules
+
+Excluding an app hides all of its titles; title rules hide or relabel only
+some, such as a Discord or personal chat tab in Firefox. In Settings →
+**Window title rules**, each rule has:
+
+- **App**: empty for every app, or one app: its desktop app id, compared
+  like an excluded app (exactly, with or without `.desktop`), or its WM
+  class (case-insensitive).
+- **Pattern**: matched against the **whole** title, case-insensitively.
+  `*` matches any text (also none), `?` one character, everything else is
+  literal (there are no escapes or `[…]` classes), so "contains Discord" is
+  `*Discord*`. It is a glob, not a regular expression: the matcher runs in
+  GNOME Shell's main loop and takes time linear in the title's length
+  whatever the pattern.
+- **Label**: what is sent instead of the title; empty sends an empty title.
+
+The first rule that matches wins. Rules see the full title (control
+characters as spaces) before it is shortened, so a label replaces a long
+title whose match is past the first 1024 characters, and nothing of it is
+ever sent. Apps in `window-title-excluded-apps` are still sent with an empty
+title. Settings refuses an empty pattern and one of only `*` (it would hide
+every title: turn **Record active window** off instead), shows why next to
+the rule and doesn't save it. At most 100 rules, with patterns and labels of
+at most 200 characters; the extension ignores entries that break these
+limits (from `dconf` or `gsettings`) and logs their number once, never their
+text. A rule change applies to the focused window within the usual 1 s settle.
+
+**Title rules only change the window metadata the extension sends** (the
+title). They don't touch screenshots: the same text visible in a window is
+still in the screenshot's pixels and in OCR of it. Use the session's own
+rules for that.
+
+### Counters in titles
+
+Some windows rewrite their title constantly with a number in it, such as an
+FPS counter in a remote-control viewer. With **Ignore digit-only title
+changes** on (`window-title-ignore-digit-changes`, the default), a title
+change is not sent while recording when, compared with the last report sent,
+the app id, app name, WM class and monitors are the same and the title only
+changed numbers of at most 3 digits (on both sides): `30 FPS` → `31 FPS` and
+`(9) Chat` → `(10) Chat` are not sent, `#20591` → `#20592` and `999` →
+`1000` are. This is the server's rule for repeated titles in day summaries.
+The window's first title stands until a change that isn't a counter tick
+(each change is compared with the last report sent, not with the skipped
+ones). Focus changes (even between two windows of one app), the re-send
+after a start, resume or reconnect, retries after a failed report and
+reports while paused are always sent, and so is a change of the window's
+monitors. A title rule's label never changes, so a relabeled window's
+counters are never sent either way.
+
 ### Monitors (at-rest guard)
 
 whatdidido's at-rest guard (its `AT_REST_GUARD.md` section 6) drops screenshots
@@ -242,8 +293,8 @@ active window** on, the extension:
 - The token is never stored in dconf/GSettings and never logged; error
   messages never include it. Settings hold only poll intervals, the chosen
   microphone's stable id, opaque id and label, the indicator toggle, the active-window
-  switch, the excluded app ids, the pause- and microphone-reminder delays and
-  the app server URL.
+  switch, the excluded app ids, the window title rules, the digit-change
+  switch, the pause- and microphone-reminder delays and the app server URL.
 - Requests carry `Authorization: Bearer …` and no `Origin`, `Cookie` or
   `Sec-Fetch-*` headers (the API refuses browser-shaped requests).
 - Requests to the app server go only to `http://127.0.0.1:<port>`, never
@@ -256,7 +307,8 @@ active window** on, the extension:
   to a session whose at-rest guard is configured; those reports are not
   counted as active time), and only when the server offers it and **Record
   active window** is on. Apps listed in `window-title-excluded-apps` are reported with an empty
-  title. Window data is never logged; send errors are logged once per distinct
+  title; titles matching a `window-title-rules` rule are replaced by its label
+  (or emptied) before they are sent, but stay visible in screenshots. Window data is never logged; send errors are logged once per distinct
   message (the last 32 remembered) without titles or the token. The server stores reports as event
   metadata (see whatdidido's `TIME_ACCOUNTING.md` for where that can go).
 - The focused window's monitor rectangles and the change time are sent only
@@ -276,6 +328,8 @@ active window** on, the extension:
 | `show-mic-indicator` | true | microphone icon in the top bar while it is on |
 | `report-active-window` | true | report the focused window while recording (server needs `--window-activity`) |
 | `window-title-excluded-apps` | empty | app ids (with or without `.desktop`) whose titles are sent empty; comma-separated in Settings |
+| `window-title-rules` | empty | `a(sss)`: (app, pattern, label); the first match replaces the title ([Title rules](#title-rules)) |
+| `window-title-ignore-digit-changes` | true | don't send title changes that only tick a short counter ([Counters in titles](#counters-in-titles)) |
 | `pause-reminder-minutes` | 10 | notify after this many minutes paused, then every this many minutes; 0 = off (0..240) |
 | `mic-reminder-minutes` | 10 | notify after this many minutes with the microphone on and no speech transcribed, then every this many minutes; 0 = off (0..240) |
 | `app-url` | empty | the app server, `http://127.0.0.1:<port>`; empty = found from the work session |
@@ -306,6 +360,7 @@ unit-tested with plain `gjs -m`. `lib/mic_model.js` likewise holds the
 microphone choice (matching, migration, the popover's texts and the
 `MicController` behind the mic tile and the input list). Likewise
 `lib/window_model.js` holds the active-window rules (payload, sanitising,
+title rules and their glob matcher, the digit-only change filter,
 debounce/spacing/retry scheduler on an injected clock, availability gating,
 the monitors a window overlaps and when that set changes, the focused window's
 signal bookkeeping) and `lib/window_tracker.js` only connects the Shell
