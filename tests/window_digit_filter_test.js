@@ -241,7 +241,8 @@ async function main() {
 
     // setTitleRules: applies to the next send. A setting with an entry that
     // can't be used blanks every title (fail closed) until it is fixed,
-    // logged once per distinct bad setting, by rule number, never its text.
+    // logged whenever the list of problems changes, by rule number, never
+    // its text.
     const BAD = [['', '*Other*', 'OTHER'], ['', '*', 'LBL']];
     h = harness();
     await h.start();
@@ -260,17 +261,19 @@ async function main() {
     eq('fail closed: another bad setting is logged', [h.logs.length, /rule 1/.test(h.logs[1])], [2, true]);
     h.r.setTitleRules([['', '', 'y']]);
     await h.advance(SETTLE_MS + SPACING_MS);
-    eq('fail closed: so is one with the same problem but other text', h.logs.length, 3);
+    eq('fail closed: one with the same problems but other text is not logged again', h.logs.length, 2);
     h.r.setTitleRules([BAD[0]]);
     await h.advance(SETTLE_MS + SPACING_MS);
-    eq('fixed: titles are sent again, nothing logged', [h.titles().at(-1), h.logs.length], ['Settings', 3]);
+    eq('fixed: titles are sent again, nothing logged', [h.titles().at(-1), h.logs.length], ['Settings', 2]);
     h.r.setTitleRules(Array.from({length: 101}, (_, i) => ['', `t${i}`, '']));
     await h.advance(SETTLE_MS + SPACING_MS);
     eq('fail closed: more than 100 rules', [h.titles().at(-1), h.logs.length, /101/.test(h.logs.at(-1))],
-        ['', 4, true]);
+        ['', 3, true]);
     h.r.setTitleRules([]);
     await h.advance(SETTLE_MS + SPACING_MS);
     eq('no rules: titles are sent', h.titles().at(-1), 'Settings');
+    h.r.setTitleRules([['', '', 'y']]);
+    eq('broken again after a fix: logged again', [h.logs.length, /rule 1/.test(h.logs.at(-1))], [4, true]);
 
     h = harness({titleRules: [['', '', '']]});
     await h.start();

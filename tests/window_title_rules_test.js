@@ -4,7 +4,8 @@
 // title replaces it with the label before it leaves the shell, failing
 // closed (every title empty) while the setting holds an entry that can't be
 // used or the title is too long to match, the prefs parser that refuses
-// empty and all-* patterns, and the counter rule
+// empty patterns and, for a rule of any app, patterns without a literal
+// character, and the counter rule
 // (sameCounter, the server's day_summary_evidence._same_title) the digit
 // filter uses.
 import GLib from 'gi://GLib';
@@ -139,7 +140,25 @@ eq('valid rule: no problem', [titleRuleProblem('', '*Discord*', ''), titleRulePr
 eq('refused: empty pattern', typeof titleRuleProblem('', '', 'x'), 'string');
 eq('refused: all-* patterns', ['*', '**', '*****'].map(p => typeof titleRuleProblem('', p, '')),
     ['string', 'string', 'string']);
-eq('allowed: * with something else', [titleRuleProblem('', '*?*', ''), titleRuleProblem('', ' ', '')], [null, null]);
+eq('allowed: * with something else', [titleRuleProblem('', '*a*', ''), titleRuleProblem('', ' ', ''),
+    titleRuleProblem('', '?x?', '')], [null, null, null]);
+// No literal character: such a pattern matches (nearly) every title. Refused
+// for a rule of any app; an app-scoped one relabels that app's every title,
+// which an excluded app can't (it only blanks).
+const NO_LITERAL = ['*', '**', '?', '??', '?*', '*?', '*?*', '?**'];
+eq('refused: no literal character in a rule of any app', NO_LITERAL.map(p => typeof titleRuleProblem('', p, 'X')),
+    NO_LITERAL.map(() => 'string'));
+eq('refused: an app of only spaces is any app', typeof titleRuleProblem('  ', '?*', 'X'), 'string');
+eq('the refusal says why and how', [/every title/.test(titleRuleProblem('', '?*', '')),
+    /app/i.test(titleRuleProblem('', '?*', ''))], [true, true]);
+eq('allowed: no literal character in an app-scoped rule', NO_LITERAL.map(p => titleRuleProblem('firefox', p, 'Web')),
+    NO_LITERAL.map(() => null));
+// App: at most 200 code points, like labels.
+eq('refused: app over 200 characters', [typeof titleRuleProblem('a'.repeat(TITLE_RULE_FIELD_MAX + 1), 'x', ''),
+    typeof titleRuleProblem('😀'.repeat(TITLE_RULE_FIELD_MAX + 1), 'x', ''),
+    titleRuleProblem('😀'.repeat(TITLE_RULE_FIELD_MAX), 'x', '')], ['string', 'string', null]);
+eq('the app refusal names the app', /^The app /.test(titleRuleProblem('a'.repeat(TITLE_RULE_FIELD_MAX + 1), 'x', '')),
+    true);
 eq('refused: pattern over 60, label over 200 characters',
     [typeof titleRuleProblem('', 'x'.repeat(61), ''), typeof titleRuleProblem('', 'a', long)], ['string', 'string']);
 eq('allowed: exactly 200 characters, counted in code points',
@@ -157,6 +176,17 @@ eq('compile: valid rules leave other titles alone', blank([['', '*q*', 'Q'], ['x
 eq('compile: no rules leave titles alone', [blank([]), blank(undefined)], ['Terminal', 'Terminal']);
 eq('fail closed: an empty pattern', blank([['', '*z*', 'Z'], ['', '', 'empty']]), '');
 eq('fail closed: an all-* pattern', blank([['', '**', 'all']]), '');
+eq('fail closed: an any-app pattern without a literal character', [blank([['', '?*', 'all']]),
+    blank([['', '*?*', 'all']])], ['', '']);
+eq('fail closed: an app over 200 characters', blank([['a'.repeat(TITLE_RULE_FIELD_MAX + 1), 'x', '']]), '');
+const scopedAll = compileTitleRules([['org.mozilla.firefox', '*', 'Web'], ['slack', '?*', 'Chat']]);
+eq('app-scoped no-literal rules: relabel every title of that app only', [scopedAll.problems,
+    applyTitleRules('Bob - Discord', 'org.mozilla.firefox.desktop', 'firefox', scopedAll.rules),
+    applyTitleRules('', 'org.mozilla.firefox.desktop', 'firefox', scopedAll.rules),
+    applyTitleRules('DM', '', 'Slack', scopedAll.rules),
+    applyTitleRules('', '', 'Slack', scopedAll.rules),
+    applyTitleRules('Terminal', 'org.gnome.Ptyxis.desktop', 'ptyxis', scopedAll.rules)],
+[[], 'Web', 'Web', 'Chat', '', 'Terminal']);
 eq('fail closed: a pattern over 60 or a label over 200 characters', [blank([['', long, '']]), blank([['', 'q', long]])],
     ['', '']);
 eq('fail closed: not (app, pattern, label)', [blank([['x', 'y']]), blank(['junk']), blank([['', 5, '']]),
@@ -205,6 +235,16 @@ eq('first match wins (reversed order)', applyTitleRules('Inbox (3) - Discord', '
     ['', '*Discord', 'second'], ['', 'Inbox*', 'first']]).rules), 'second');
 eq('matched on the title with control characters as spaces',
     applyTitleRules('Chat\n- Bob', '', '', compileTitleRules([['', 'Chat - *', 'Chat']]).rules), 'Chat');
+// The pattern's control characters become spaces exactly as the title's, so
+// the two always agree.
+eq('pattern control characters are spaces too', [globMatch('a\tb', 'a b'), globMatch('a\tb', 'a\nb'),
+    globMatch('a\u0085b', 'a\u009fb'), globMatch('a\u007fb', 'a b'), globMatch('a\tb', 'ab'), globMatch('a\tb', 'a?b')],
+[true, true, true, true, false, false]);
+eq('a pattern with the title\'s own control characters relabels it', ['\t', '\n', '\r', '\u0000', '\u001b', '\u007f',
+    '\u0085', '\u009f'].map(ch => applyTitleRules(`ssh${ch}prod-db-01`, '', '',
+    compileTitleRules([['', `ssh${ch}prod-db-*`, 'Terminal']]).rules)), Array(8).fill('Terminal'));
+eq('pattern control characters still count toward the 60', [titleRuleProblem('', '\t'.repeat(60), ''),
+    typeof titleRuleProblem('', '\t'.repeat(61), '')], [null, 'string']);
 
 // --- windowPayload with rules ------------------------------------------------------------
 const raw = (title, appId = 'org.mozilla.firefox.desktop', wmClass = 'firefox') =>
@@ -248,6 +288,12 @@ eq('parse: refused rows have a problem',
     [row('', '', ''), row('', '**', 'x'), row('', long, ''), row('', 'a', long)].map(r => typeof r.problem),
     ['string', 'string', 'string', 'string']);
 eq('parse: all-* refusal says why', /every title/.test(row('', '**', 'x').problem), true);
+eq('parse: no literal character, any app refused, app-scoped saved', [typeof row(' ', '?*', 'x').problem,
+    row(' firefox ', '?*', 'x')], ['string', {rule: ['firefox', '?*', 'x'], problem: null}]);
+eq('parse: an app over 200 characters is refused', [typeof row('a'.repeat(TITLE_RULE_FIELD_MAX + 1), 'x', '').problem,
+    row(` ${'a'.repeat(TITLE_RULE_FIELD_MAX)} `, 'x', '').problem], ['string', null]);
+eq('parse: control characters in a pattern are kept (Settings and the extension agree)',
+    row('', 'a\tb*', '').rule, ['', 'a\tb*', '']);
 eq('parse: row 101 is refused', [row('', 'p', '', TITLE_RULES_MAX - 1).problem,
     typeof row('', 'p', '', TITLE_RULES_MAX).problem], [null, 'string']);
 eq('parse: missing fields are empty', parseTitleRule({pattern: 'x'}, 0).rule, ['', 'x', '']);
