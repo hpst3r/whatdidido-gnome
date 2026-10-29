@@ -174,6 +174,119 @@ name, the WM class and the window title, or "no focused window".
 - The Active window tile is insensitive, with "Not enabled on the server",
   when the server doesn't offer it.
 
+### Title rules
+
+Excluding an app hides all of its titles; title rules hide or relabel only
+some, such as a Discord or personal chat tab in Firefox. In Settings →
+**Window title rules**, each rule has:
+
+- **App**: empty for every app, or one app: its desktop app id, compared
+  like an excluded app (exactly, with or without `.desktop`), or its WM
+  class (case-insensitive). At most 200 characters.
+- **Pattern**: matched against the **whole** title, case-insensitively.
+  `*` matches any text (also none), `?` one character, everything else is
+  literal (there are no escapes or `[…]` classes), so "contains Discord" is
+  `*Discord*`. It is a glob, not a regular expression: the matcher runs in
+  GNOME Shell's main loop and takes time linear in the title's length
+  whatever the pattern. Control characters (a tab, a newline) in the pattern
+  are spaces, as in the title, so a pattern copied from a title matches it.
+  A pattern with no literal character (only `*` and `?`, which matches every
+  title) needs an app: it relabels every title of that app, which an
+  excluded app can't (that only empties them). For every app it is refused;
+  turn **Record active window** off instead.
+- **Label**: what is sent instead of the title; empty sends an empty title.
+
+The first rule that matches wins. Rules see the full title (control
+characters as spaces) before it is shortened, so a label replaces a long
+title whose match is past the first 1024 characters, and nothing of it is
+ever sent. Apps in `window-title-excluded-apps` are still sent with an empty
+title. A rule change applies to the focused window within the usual 1 s
+settle.
+
+Case-insensitive means each character is lowercased on its own (JavaScript
+`toLowerCase`, the same for the pattern and the title), not full Unicode case
+folding: `É` matches `é` and `Ж` matches `ж`, but `ß` doesn't match `SS` and
+`ﬁ` doesn't match `fi`, and `?` is always one character of the title as
+written. App ids are compared exactly (like excluded apps), WM classes
+case-insensitively.
+
+Limits: at most 100 rules, patterns of at most 60 characters, apps and
+labels of at most 200 (all counted in characters, i.e. code points). Only titles of up
+to 4096 characters are matched. These keep the worst case, 100 rules on a
+4096-character title, at about 2 ms in the shell's main loop (measured by
+`tests/window_title_rules_test.js`, which fails above 8 ms).
+
+**Title rules fail closed.** The rule meant to hide a title is never skipped
+quietly:
+
+- While `window-title-rules` holds any entry that can't be used (more than
+  100 rules, an empty pattern, one of only `*` and `?` for every app, an
+  app, pattern or label over its limit; possible through `dconf` or
+  `gsettings`), **every** window title is sent empty until the setting is
+  fixed. The extension logs this whenever the list of problems changes
+  (not again for a change that keeps the same problems, and apart from the
+  send errors it logs once), naming the entries by number, never their text, and
+  Settings marks the row ("Every window title is sent empty until this rule
+  is fixed or removed").
+- **Wrong-typed values are the exception.** The setting's type is `a(sss)`.
+  `dconf write` doesn't check types: a value of another type (for example a
+  rule without its label, `[('', '*Bank*')]`, or a list of strings) is
+  silently ignored by GSettings, which then reports no rules at all, so
+  titles are sent unchanged. GSettings can't tell such a value from an unset
+  one. Edit rules in Settings or with `gsettings set`, which both check the
+  type.
+- With at least one rule set, a title longer than 4096 characters is sent
+  empty rather than matched.
+
+In Settings → **Window title rules**, a rule is saved when you press Enter
+in one of its fields or move the focus out of them (and when the window
+closes), and only when the whole rule is valid. Typing doesn't save, and
+while an edited rule is invalid (an empty pattern, one of only `*` and `?`
+without an app, or a field over its limit) Settings shows why next to it
+and the setting keeps
+the rule's last saved version, so editing a rule never drops it. A new rule
+is saved only once it is valid and committed; removing a rule saves at
+once.
+
+**Title rules only change the window metadata the extension sends** (the
+title). They don't touch screenshots: the same text visible in a window is
+still in the screenshot's pixels and in OCR of it. Use the session's own
+rules for that.
+
+### Counters in titles
+
+Some windows rewrite their title constantly with a number in it, such as an
+FPS counter in a remote-control viewer. With **Delay digit-only title
+changes** on (`window-title-ignore-digit-changes`, the default), a title
+change is held back while recording when, compared with the last report
+sent, the app id, app name, WM class and monitors are the same and the title
+only changed numbers of at most 3 digits (on both sides): `30 FPS` → `31
+FPS`, `(9) Chat` → `(10) Chat` and `Issue 123` → `Issue 124` are held,
+`#20591` → `#20592` and `999` → `1000` are sent as usual. This is the
+server's rule for repeated titles in day summaries.
+
+A held title is sent once the title has stayed unchanged for 15 seconds,
+and every further change restarts the 15 seconds. So a counter that ticks
+every few seconds is never sent while it ticks (the window's last reported
+title stands), while moving from `Issue 123` to `Issue 124` or from
+`Page 2 of 10` to `Page 3 of 10` is recorded about 15 s late; to a session
+with the at-rest guard it is stamped with when that title first appeared.
+Each change is compared with the last report sent, not with the held ones,
+and going back to the sent title drops the held one.
+
+Anything else that is sent replaces a held title, which is then never sent
+after it: a change that isn't a counter tick, and the reports that are
+always sent: focus changes (even between two windows of one app), the
+re-send after a start, resume or reconnect, retries after a failed report,
+reports while paused, and a change of the window's monitors. When the focus
+moves to another window within the 15 seconds, the held title is dropped
+rather than sent first: sending it would delay the new window's report by
+the 2 s spacing between reports and record the old window over that time,
+while the title it replaces is the same counter by the server's rule. A held
+title that is sent and fails is retried like any other report. A title
+rule's label never changes, so a relabeled window's counters are never sent
+either way.
+
 ### Monitors (at-rest guard)
 
 whatdidido's at-rest guard (its `AT_REST_GUARD.md` section 6) drops screenshots
@@ -242,8 +355,8 @@ active window** on, the extension:
 - The token is never stored in dconf/GSettings and never logged; error
   messages never include it. Settings hold only poll intervals, the chosen
   microphone's stable id, opaque id and label, the indicator toggle, the active-window
-  switch, the excluded app ids, the pause- and microphone-reminder delays and
-  the app server URL.
+  switch, the excluded app ids, the window title rules, the digit-change
+  switch, the pause- and microphone-reminder delays and the app server URL.
 - Requests carry `Authorization: Bearer …` and no `Origin`, `Cookie` or
   `Sec-Fetch-*` headers (the API refuses browser-shaped requests).
 - Requests to the app server go only to `http://127.0.0.1:<port>`, never
@@ -256,7 +369,9 @@ active window** on, the extension:
   to a session whose at-rest guard is configured; those reports are not
   counted as active time), and only when the server offers it and **Record
   active window** is on. Apps listed in `window-title-excluded-apps` are reported with an empty
-  title. Window data is never logged; send errors are logged once per distinct
+  title; titles matching a `window-title-rules` rule are replaced by its label
+  (or emptied) before they are sent, but stay visible in screenshots; while
+  that setting holds an unusable entry, every title is sent empty. Window data is never logged; send errors are logged once per distinct
   message (the last 32 remembered) without titles or the token. The server stores reports as event
   metadata (see whatdidido's `TIME_ACCOUNTING.md` for where that can go).
 - The focused window's monitor rectangles and the change time are sent only
@@ -276,6 +391,8 @@ active window** on, the extension:
 | `show-mic-indicator` | true | microphone icon in the top bar while it is on |
 | `report-active-window` | true | report the focused window while recording (server needs `--window-activity`) |
 | `window-title-excluded-apps` | empty | app ids (with or without `.desktop`) whose titles are sent empty; comma-separated in Settings |
+| `window-title-rules` | empty | `a(sss)`: (app, pattern, label); the first match replaces the title; any unusable entry empties every title ([Title rules](#title-rules)) |
+| `window-title-ignore-digit-changes` | true | send title changes that only tick a short counter once they settle for 15 s ([Counters in titles](#counters-in-titles)) |
 | `pause-reminder-minutes` | 10 | notify after this many minutes paused, then every this many minutes; 0 = off (0..240) |
 | `mic-reminder-minutes` | 10 | notify after this many minutes with the microphone on and no speech transcribed, then every this many minutes; 0 = off (0..240) |
 | `app-url` | empty | the app server, `http://127.0.0.1:<port>`; empty = found from the work session |
@@ -306,6 +423,7 @@ unit-tested with plain `gjs -m`. `lib/mic_model.js` likewise holds the
 microphone choice (matching, migration, the popover's texts and the
 `MicController` behind the mic tile and the input list). Likewise
 `lib/window_model.js` holds the active-window rules (payload, sanitising,
+title rules and their glob matcher, the digit-only change filter,
 debounce/spacing/retry scheduler on an injected clock, availability gating,
 the monitors a window overlaps and when that set changes, the focused window's
 signal bookkeeping) and `lib/window_tracker.js` only connects the Shell
