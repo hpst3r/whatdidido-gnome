@@ -282,6 +282,8 @@ active window** on, the extension:
 
 ## Develop
 
+Contributors and coding agents: see [AGENTS.md](AGENTS.md) for the testing, deploy and privacy rules.
+
 ```bash
 make test      # model unit tests + client tests against a loopback fake API
 make check     # test + syntax (node --check) + schema
