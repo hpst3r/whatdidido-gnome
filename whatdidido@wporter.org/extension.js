@@ -143,8 +143,14 @@ class Indicator extends PanelMenu.Button {
             this._settings.connect('changed::poll-idle', () => this._schedule()),
             this._settings.connect('changed::show-mic-indicator', () => this._render()),
             this._settings.connect('changed::show-output-indicator', () => this._render()),
-            ...['microphone-stable-id', 'microphone-id', 'microphone-label', ...Object.values(OUTPUT_KEYS)].map(key =>
+            ...['microphone-stable-id', 'microphone-id', 'microphone-label'].map(key =>
                 this._settings.connect(`changed::${key}`, () => this._render())),
+            // Forget output (prefs) also turns a live output off, once.
+            ...Object.values(OUTPUT_KEYS).map(key => this._settings.connect(`changed::${key}`, () => {
+                if (this._output.savedChanged())
+                    this._setOutput(false);
+                this._render();
+            })),
             this._settings.connect('changed::app-url', () => {
                 this._appBase = null;
                 this._day = null;

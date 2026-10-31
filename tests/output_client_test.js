@@ -55,7 +55,10 @@ async function main() {
     const old = await client.status(null);
     eq('old server: no output key', 'output' in old, false);
     eq('old server: not offered', outputOffered(old, true), false);
-    await rejects('old server: /outputs 404', client.outputs(null), e => e.status === 404);
+    // The real router's catch-all refusal (the client re-reads control.json once on a 403).
+    await rejects('old server: /outputs 403 forbidden', client.outputs(null), e => e.status === 403 && e.code === 'forbidden');
+    fake.requests = [];
+    await rejects('old server: off -> 403 forbidden', client.setOutputOn(false, DOCK, null), e => e.status === 403 && e.code === 'forbidden');
 
     fake.outputRoutes = true;
     fake.outputGate = false;
@@ -74,8 +77,8 @@ async function main() {
     fake.requests = [];
     const inv = await client.outputs(null);
     eq('outputs list', inv, {inventory: 'inv1', outputs: [
-        {stable_id: 'alsa_output.pci', id: 'o1', label: 'Built-in Speakers'},
-        {stable_id: 'alsa_output.usb-dock', id: 'o2', label: 'Dock Headphones'}]});
+        {id: 'o1', label: 'Built-in Speakers', stable_id: 'alsa_output.pci'},
+        {id: 'o2', label: 'Dock Headphones', stable_id: 'alsa_output.usb-dock'}]});
     const r0 = fake.requests[0];
     eq('outputs request: GET, bearer, no body', r0 && [r0.method, r0.path, r0.headers.authorization, r0.body],
         ['GET', '/control/v1/outputs', `Bearer ${TOKEN}`, '']);

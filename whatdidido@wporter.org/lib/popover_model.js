@@ -21,7 +21,7 @@
 
 import {activeMicLabel, micSwitchLabel} from './mic_model.js';
 import {allowedActions, lastErrorText, micSwitch, outputSwitch, stateLabel} from './model.js';
-import {OUTPUT_CHOOSE_TEXT, activeOutputLabel, outputOffered, outputTrouble} from './output_model.js';
+import {OUTPUT_CHOOSE_TEXT, activeOutputLabel, outputAvailable, outputOffered, outputTrouble} from './output_model.js';
 import {pausedForText} from './pause_reminder.js';
 import {
     appInitials, clockTime, currentStretch, hhmm, lastEntry, lastFocus, localDate, sparkBuckets, ticketColor,
@@ -225,7 +225,9 @@ function micTile(status, running, mics) {
     };
 }
 
-// The Output tile (Amendment 3): only when the session offers output capture.
+// The Output tile (Amendment 3): only when the status has an `output` object.
+// With output.available false an off tile is greyed out like the
+// microphone's; one that is on keeps its Off.
 function outputTile(status, running, outputs, choiceLabel) {
     const visible = outputOffered(status, running);
     const output = visible ? status.output : null;
@@ -233,6 +235,8 @@ function outputTile(status, running, outputs, choiceLabel) {
     let subtitle;
     if (output?.on === true)
         subtitle = `On · ${activeOutputLabel(output, outputs) ?? 'output'}${outputTrouble(output)}`;
+    else if (!outputAvailable(status, running))
+        subtitle = 'Off · outputs unavailable';
     else
         subtitle = choiceLabel ? `Off · ${choiceLabel}` : OUTPUT_CHOOSE_TEXT;
     const on = visible && sw.on;
@@ -317,9 +321,10 @@ function inputBlock(status, running, micView, mics, micChoiceLabel, expanded) {
     };
 }
 
-// The Output source picker, like the Input picker, below it.
+// The Output source picker, like the Input picker, below it: only while
+// output.available is true.
 function outputBlock(status, running, outputView, outputs, choiceLabel, expanded) {
-    const visible = outputOffered(status, running);
+    const visible = outputAvailable(status, running);
     const output = visible ? status.output : null;
     const sources = Array.isArray(outputView?.sources) ? outputView.sources : [];
     const active = output?.on === true ? activeOutputLabel(output, outputs) : null;
@@ -569,12 +574,12 @@ function footerBlock(status, running, ui) {
  *            primary: null | {name, icon, accessibleName, accent, sensitive, action}}
  *   notices [{index, name, text}]
  *   tiles   {visible, mic: {name, visible, title, subtitle, icon, on, accent, sensitive, action, accessibleName},
- *            output: {...as mic} (visible only when the status has output.available true),
+ *            output: {...as mic} (visible only when the status has an `output` object),
  *            phi: {name, visible, title, subtitle, count, icon, sensitive, link, accessibleName},
  *            window: {name, visible, title, subtitle, icon, on, accent, sensitive, action, accessibleName}}
  *   input   {name, visible, title, value, expanded, sensitive, action, accessibleName, emptyText (or null),
  *            items: [{index, name, label, checked, accessibleName, action}]}
- *   outputSource {...as input} (the Output source picker; visible like the Output tile)
+ *   outputSource {...as input} (the Output source picker; visible only while output.available is true)
  *   interval {name, visible, title, value, steps, index, max, fraction (0..1), seconds (shown),
  *            sessionSeconds (the status's), dragging, holding, sensitive, accessibleName}
  *   now     {name, visible, dimmed, overline, error (or null),

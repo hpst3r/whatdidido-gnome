@@ -113,13 +113,15 @@ export function micSwitch(status, running) {
 }
 
 // The output monitor switch (CONTROL_API.md Amendment 5): the microphone's
-// rules, for a server that reports an `output` object.
+// rules, for a server that reports an `output` object, except that an output
+// that is on keeps its Off while output.available is false (the server turns
+// it off without reading the inventory).
 export function outputSwitch(status, running) {
     const output = status?.output;
     if (!running || !output)
         return {sensitive: false, on: false};
     return {
-        sensitive: output.available === true && MIC_STATES.includes(status.state),
+        sensitive: (output.available === true || output.on === true) && MIC_STATES.includes(status.state),
         on: output.on === true,
     };
 }
@@ -132,10 +134,10 @@ function micLive(status, running) {
     return running && status.mic?.on === true && !MIC_DEAD_STATES.includes(status.mic.state);
 }
 
-// The same for the output monitor (output.state has the mic's values).
+// The same for the output monitor (output.state has the mic's values); like
+// the microphone's, it does not depend on output.available.
 function outputLive(status, running) {
-    const output = running ? status.output : null;
-    return output?.available === true && output.on === true && !MIC_DEAD_STATES.includes(output.state);
+    return running && status.output?.on === true && !MIC_DEAD_STATES.includes(status.output.state);
 }
 
 const BUSY = ['starting', 'recording', 'recovering', 'stopping'];

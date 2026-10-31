@@ -1,0 +1,12 @@
+{
+  "extends": "output-on",
+  "description": "The output keeps capturing after an inventory read failed (output.available false): the top bar still has the speaker icon, the Output tile stays on with its Off, the Output source picker is hidden like the Input picker of an unavailable microphone, and no output list is fetched.",
+  "tags": ["state", "output"],
+  "control": {
+    "status": {
+      "output": {"available": false, "remembered": false}
+    }
+  },
+  "expect_labels": ["Output", "On · USB Dock Headphones", "3 monitors · every 5 s · mic on"],
+  "expect_no_requests": [{"method": "GET", "path": "/control/v1/outputs"}]
+}

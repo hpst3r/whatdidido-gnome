@@ -26,11 +26,20 @@ export const CONSENT_BODY = 'Output capture records everything this computer pla
 export const CONSENT_CANCEL = 'Cancel';
 export const CONSENT_CONFIRM = 'Everyone has agreed — record';
 
-// Feature detection: every output control exists only while the session
-// reports `output.available === true`. An older server has no `output` key
-// (and a server without --allow-audio-capture none either).
+// Feature detection: the Output tile exists while the status has an `output`
+// object. An older server has no `output` key (and a server without
+// --allow-audio-capture none either).
 export function outputOffered(status, running) {
-    return !!running && status?.output?.available === true;
+    const output = running ? status?.output : null;
+    return !!output && typeof output === 'object' && !Array.isArray(output);
+}
+
+// output.available false (no readable inventory, the session closing) is the
+// microphone's mic.available false: no Output source list, no listing, and an
+// off tile is greyed out. An output that is on still shows as on, with its
+// Off (the server turns it off without reading the inventory).
+export function outputAvailable(status, running) {
+    return outputOffered(status, running) && status.output.available === true;
 }
 
 // The saved choice resolves exactly like a microphone's: by stable id, else
@@ -60,7 +69,7 @@ export function outputTrouble(output) {
 
 // The notice while the output is off: why it cannot be turned on.
 export function outputHint(status, {running = true, outputs = null, preferred = {}, prompt = false, missing = false} = {}) {
-    if (!outputOffered(status, running) || status.output.on === true)
+    if (!outputAvailable(status, running) || status.output.on === true)
         return null;
     if (!hasMicChoice(preferred))
         return prompt ? OUTPUT_CHOOSE_TEXT : null;
@@ -85,6 +94,14 @@ export function chooseAction(status, prompt, item) {
     if (output.on === true)
         return liveSwitchNeeded(output, true, item) ? 'switch' : 'save';
     return prompt ? 'ask' : 'save';
+}
+
+// Forget output (prefs) only clears the saved keys, so a remembered "on"
+// would survive on the server: when the saved choice goes from set to
+// cleared (stable id and id both empty) while the latest status has the
+// output on, the extension turns it off once ({"on": false}, no dialog).
+export function forgetTurnsOff(hadChoice, hasChoice, status, running) {
+    return hadChoice && !hasChoice && !!running && status?.output?.on === true;
 }
 
 const ERROR_CODES = {
@@ -128,6 +145,7 @@ export class OutputController {
         this.running = false;
         this.prompt = false;    // "Choose an output" until a pick or the menu closes
         this.missing = false;   // the client refused the saved choice as not connected
+        this._hadChoice = hasMicChoice(this.preferred);  // for savedChanged()
     }
 
     get preferred() {
@@ -157,6 +175,15 @@ export class OutputController {
 
     menuClosed() {
         this.prompt = false;
+    }
+
+    // Call on every change of an OUTPUT_KEYS setting; true when that change
+    // forgot the choice and the output must be turned off (forgetTurnsOff).
+    savedChanged() {
+        const has = hasMicChoice(this.preferred);
+        const off = forgetTurnsOff(this._hadChoice, has, this.status, this.running);
+        this._hadChoice = has;
+        return off;
     }
 
     _serial(fn) {

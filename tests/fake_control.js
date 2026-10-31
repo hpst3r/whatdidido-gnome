@@ -14,9 +14,12 @@
 // Output monitor (CONTROL_API.md Amendment 5): with `outputRoutes` set the
 // fake has GET /control/v1/outputs and POST /control/v1/output; with
 // `outputGate` also set (--allow-audio-capture) its status carries the
-// `output` object right after `mic`. Without the gate the routes answer
+// `output` object right after `mic`. Without the gate (a server without
+// --allow-audio-capture) there is no `output` key and the routes answer
 // 409 unavailable after the shape check; without the routes (an older
-// server, the default) there is no `output` key and they are 404.
+// server, the default) there is no `output` key either and they are the
+// real router's catch-all 403 forbidden, like every unknown /control/ route.
+// /outputs items are {id, label, stable_id}, in the real router's order.
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
@@ -165,7 +168,7 @@ export class FakeControl {
         let body = null;
         if (method === 'POST') {
             if (path === '/control/v1/output' && !this.outputRoutes)
-                return this._reply(msg, 404, {error: 'not_found'});
+                return this._reply(msg, 403, {error: 'forbidden'});
             const tooLarge = path in BODY_LIMIT ? (bytes?.length ?? 0) > BODY_LIMIT[path] : raw.length > 1024;
             if (headers['content-type'] !== 'application/json' || tooLarge)
                 return this._reply(msg, 400, {error: 'invalid'});
@@ -194,10 +197,11 @@ export class FakeControl {
             return this._reply(msg, 200, {inventory: this.inventory, microphones: this._micList()});
         case 'GET /control/v1/outputs':
             if (!this.outputRoutes)
-                return this._reply(msg, 404, {error: 'not_found'});
+                return this._reply(msg, 403, {error: 'forbidden'});
             if (!this.outputGate)
                 return this._reply(msg, 409, {error: 'unavailable'});
-            return this._reply(msg, 200, {inventory: this.inventory, outputs: this.outputs.map(o => ({stable_id: null, ...o}))});
+            return this._reply(msg, 200, {inventory: this.inventory,
+                outputs: this.outputs.map(o => ({id: o.id, label: o.label, stable_id: o.stable_id ?? null}))});
         case 'POST /control/v1/output':
             return this._output(msg, body);
         case 'POST /control/v1/command': {
@@ -250,6 +254,10 @@ export class FakeControl {
             }
             return undefined;
         default:
+            // The real router's catch-all: any other method, path or version
+            // under /control/ is the fixed refusal.
+            if (path.startsWith('/control/'))
+                return this._reply(msg, 403, {error: 'forbidden'});
             return this._reply(msg, 404, {error: 'not_found'});
         }
     }

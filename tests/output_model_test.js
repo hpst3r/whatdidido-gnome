@@ -7,8 +7,8 @@ import System from 'system';
 import {buildView, outputSwitch} from '../whatdidido@wporter.org/lib/model.js';
 import {
     CONSENT_BODY, CONSENT_CANCEL, CONSENT_CONFIRM, CONSENT_TITLE, OUTPUT_CHOOSE_TEXT, OUTPUT_KEYS, OutputController,
-    activeOutputLabel, chooseAction, chooseOutput, outputErrorText, outputHint, outputMissingText, outputOffered,
-    outputRequest, outputSourceItems,
+    activeOutputLabel, chooseAction, chooseOutput, outputAvailable, outputErrorText, outputHint, outputMissingText,
+    outputOffered, outputRequest, outputSourceItems,
 } from '../whatdidido@wporter.org/lib/output_model.js';
 import {popoverView} from '../whatdidido@wporter.org/lib/popover_model.js';
 
@@ -46,10 +46,15 @@ eq('dialog body is the session page warning', CONSENT_BODY,
 eq('dialog buttons', [CONSENT_CANCEL, CONSENT_CONFIRM], ['Cancel', 'Everyone has agreed — record']);
 
 // --- feature detection ----------------------------------------------------------------
+// The tile follows the `output` object; the list follows output.available
+// (tests/output_indicator_test.js has the available false cases).
 eq('offered: output.available true', outputOffered(status(OFF_OBJ), true), true);
 eq('old server (no output key): not offered', outputOffered(status(undefined), true), false);
-eq('available false: not offered', outputOffered(status({...OFF_OBJ, available: false}), true), false);
-eq('available truthy but not true: not offered', outputOffered(status({...OFF_OBJ, available: 1}), true), false);
+eq('available false: still offered', outputOffered(status({...OFF_OBJ, available: false}), true), true);
+eq('available: true only for available true',
+    [outputAvailable(status(OFF_OBJ), true), outputAvailable(status({...OFF_OBJ, available: false}), true),
+        outputAvailable(status({...OFF_OBJ, available: 1}), true), outputAvailable(status(undefined), true)],
+    [true, false, false, false]);
 eq('not running: not offered', outputOffered(status(OFF_OBJ), false), false);
 eq('null status: not offered', outputOffered(null, true), false);
 
@@ -126,7 +131,7 @@ for (const st of ['limit_reached', 'failed'])
     eq(`indicator: ${st} -> hidden (stopped for good)`, buildView(status({...ON_OBJ, state: st})).outputIndicator, false);
 eq('indicator: off -> hidden', buildView(status(OFF_OBJ)).outputIndicator, false);
 eq('indicator: old server -> hidden', buildView(status(undefined)).outputIndicator, false);
-eq('indicator: on but available false -> hidden', buildView(status({...ON_OBJ, available: false})).outputIndicator, false);
+eq('indicator: on with available false -> shown (like the mic)', buildView(status({...ON_OBJ, available: false})).outputIndicator, true);
 eq('indicator: not running -> hidden', buildView(status(ON_OBJ), {running: false}).outputIndicator, false);
 eq('indicator: setting off -> hidden', buildView(status(ON_OBJ), {showOutput: false}).outputIndicator, false);
 eq('indicator: mic setting does not hide it', buildView(status(ON_OBJ), {showMic: false}).outputIndicator, true);

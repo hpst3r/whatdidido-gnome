@@ -301,16 +301,23 @@ cropped to the menu with a small margin. Scenarios are JSON files under
 ## Amendment 3 (output capture, whatdidido CONTROL_API.md Amendment 5)
 
 1. **Feature detection.** Everything below appears only while the status
-   has `output.available === true` (a server with `--allow-audio-capture`
-   that knows the output role). Without an `output` object (an older
-   server, or no audio capture) the popover, the top bar and every request
-   are exactly as before; the status card's subtitle never mentions the
-   output.
+   has an `output` object (a server with `--allow-audio-capture` that knows
+   the output role). Without one (an older server, or no audio capture) the
+   popover, the top bar and every request are exactly as before; the status
+   card's subtitle never mentions the output. `output.available` false (the
+   server could not read its inventory, or the session is closing) is the
+   microphone's `mic.available` false: the Output source picker is hidden
+   and `GET /control/v1/outputs` is not read, and an off tile is
+   insensitive with the subtitle "Off · outputs unavailable"; unlike the
+   microphone's, a tile that is on stays on and sensitive, so Off still
+   works (the server turns an output off without reading the inventory).
+   The top-bar icon and accessible name never depend on `available`.
 2. **Output tile** (§4.4), right after the Microphone tile: icon
    `audio-speakers-symbolic`, title "Output", accessible name "Output
    (other participants)"; accent-filled when on; subtitle "On · <active
    label>" (with the trouble state like the microphone's), "Off · <saved
-   label>", or "Choose an output". Sensitive in the microphone's states.
+   label>", "Choose an output", or "Off · outputs unavailable" (§1).
+   Sensitive in the microphone's states.
    Toggling runs `OutputController.toggle`; with no saved choice, turning
    it on expands the Output source list instead and shows the notice
    "Choose an output".
@@ -342,7 +349,13 @@ cropped to the menu with a small margin. Scenarios are JSON files under
 7. **Settings.** `output-stable-id`, `output-id`, `output-label` (the
    choice, by stable id like the microphone's) and `show-output-indicator`;
    preferences group "Output (other participants)" with "Chosen output",
-   "Forget output" and the indicator switch. No output reminder.
+   "Forget output" and the indicator switch. No output reminder. Forget
+   output only clears the three keys, so when the saved choice goes from
+   set to cleared (`output-stable-id` and `output-id` both empty) while the
+   latest status has `output.on === true`, the extension sends
+   `POST /control/v1/output {"on": false}` once, without the dialog
+   (`OutputController.savedChanged`, `forgetTurnsOff`); never at startup,
+   while the output is off, or without an `output` object.
 8. **Actor names** (§5) gain `wdi-pop-output`, `wdi-pop-output-source`,
    `wdi-pop-output-item-<n>`, and for the dialog `wdi-output-consent`,
    `wdi-output-consent-cancel`, `wdi-output-consent-confirm`.
@@ -351,7 +364,14 @@ cropped to the menu with a small margin. Scenarios are JSON files under
    texts and `OutputController`); `popoverView` gains `tiles.output` and
    `outputSource`; `ControlClient` gains `outputs()` and
    `setOutputOn(on, preferred)`. The dialog is wiring in `extension.js`.
-10. **Tests:** `tests/output_model_test.js`, `tests/output_client_test.js`
-    (against `tests/fake_control.js` with the output routes), and the
+10. **Tests:** `tests/output_model_test.js`, `tests/output_indicator_test.js`
+    (`output.available` false), `tests/output_consent_test.js` (no path
+    sends an on without the dialog), `tests/output_forget_test.js` (Forget
+    output turns it off), `tests/output_client_test.js` (against
+    `tests/fake_control.js` with the output routes),
+    `tests/output_fakes_test.js` (the fake against the real router's
+    answers: an older server's `403 forbidden`, an ungated one's
+    `409 unavailable`, `/outputs` items `id`, `label`, `stable_id`), and the
     `output-*` screenshot scenarios, including the dialog itself
-    (`"shot": "dialog"`) and its Cancel and confirm buttons.
+    (`"shot": "dialog"`), its Cancel and confirm buttons, and
+    `output-unavailable` / `output-unavailable-off`.

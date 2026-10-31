@@ -145,7 +145,20 @@ async function main() {
         const oldAuth = {Authorization: `Bearer ${oldCtl.token}`};
         const oldSt = (await request('GET', `${oldCtl.base_url}/control/v1/status`, {headers: oldAuth})).json;
         check(!('output' in oldSt), 'older server: no output key');
-        check((await request('GET', `${oldCtl.base_url}/control/v1/outputs`, {headers: oldAuth})).status === 404, 'older server: /outputs 404');
+        const oldOuts = await request('GET', `${oldCtl.base_url}/control/v1/outputs`, {headers: oldAuth});
+        check(oldOuts.status === 403 && oldOuts.json?.error === 'forbidden', 'older server: /outputs 403 forbidden (real catch-all)');
+        const oldOff = await request('POST', `${oldCtl.base_url}/control/v1/output`, {headers: oldAuth, body: {on: false}});
+        check(oldOff.status === 403 && oldOff.json?.error === 'forbidden', 'older server: POST /output 403 forbidden');
+        const nonesuch = await request('GET', `${oldCtl.base_url}/control/v1/nonesuch`, {headers: oldAuth});
+        check(nonesuch.status === 403 && nonesuch.json?.error === 'forbidden', 'unknown /control/ route: 403 forbidden');
+        await request('POST', `${admin}/scenario`, {body: {...full, name: 'recording-full', output_routes: true}});
+        const ungCtl = JSON.parse(dec.decode(GLib.file_get_contents(ctlPath)[1]));
+        const ungAuth = {Authorization: `Bearer ${ungCtl.token}`};
+        check(!('output' in (await request('GET', `${ungCtl.base_url}/control/v1/status`, {headers: ungAuth})).json), 'ungated: no output key');
+        const ungOuts = await request('GET', `${ungCtl.base_url}/control/v1/outputs`, {headers: ungAuth});
+        check(ungOuts.status === 409 && ungOuts.json?.error === 'unavailable', 'ungated: /outputs 409 unavailable');
+        const ungOff = await request('POST', `${ungCtl.base_url}/control/v1/output`, {headers: ungAuth, body: {on: false}});
+        check(ungOff.status === 409 && ungOff.json?.error === 'unavailable', 'ungated: POST /output 409 unavailable');
         const outOn = scenario('output-on');
         const outBase = scenario(outOn.extends);
         await request('POST', `${admin}/scenario`, {body: {...outBase, ...outOn, control: {status: {...outBase.control.status, ...outOn.control.status}}, name: 'output-on'}});
@@ -155,6 +168,7 @@ async function main() {
         check(os.output?.available === true && os.output.on === true, 'output-on: status output on');
         const outs = await request('GET', `${oc.base_url}/control/v1/outputs`, {headers: oa});
         check(outs.status === 200 && outs.json.inventory === 'inv1' && outs.json.outputs.length === 2, 'outputs served');
+        check(JSON.stringify(Object.keys(outs.json.outputs[0])) === '["id","label","stable_id"]', 'outputs items: id, label, stable_id');
         const noConsent = await request('POST', `${oc.base_url}/control/v1/output`,
             {headers: oa, body: {on: true, source_id: outs.json.outputs[0].id, inventory: 'inv1'}});
         check(noConsent.status === 400, 'output on without consent -> 400');
@@ -175,6 +189,20 @@ async function main() {
         const stale = await request('POST', `${oc.base_url}/control/v1/output`,
             {headers: oa, body: {on: true, source_id: outs.json.outputs[0].id, inventory: 'inv0', consent: true}});
         check(stale.status === 409 && stale.json.error === 'inventory_changed', 'stale inventory -> 409');
+
+        // output.available false (an unreadable inventory): no list, no on, off works.
+        await request('POST', `${admin}/scenario`, {body: {...outBase, ...outOn, name: 'output-unavailable', control: {status: {
+            ...outBase.control.status, output: {...outOn.control.status.output, available: false}}}}});
+        const uc = JSON.parse(dec.decode(GLib.file_get_contents(ctlPath)[1]));
+        const ua = {Authorization: `Bearer ${uc.token}`};
+        const uOuts = await request('GET', `${uc.base_url}/control/v1/outputs`, {headers: ua});
+        check(uOuts.status === 409 && uOuts.json?.error === 'unavailable', 'available false: /outputs 409 unavailable');
+        const uOn = await request('POST', `${uc.base_url}/control/v1/output`,
+            {headers: ua, body: {on: true, source_id: outs.json.outputs[0].id, inventory: 'inv1', consent: true}});
+        check(uOn.status === 409 && uOn.json?.error === 'unavailable', 'available false: on -> 409 unavailable');
+        const uOff = await request('POST', `${uc.base_url}/control/v1/output`, {headers: ua, body: {on: false}});
+        check(uOff.status === 200 && uOff.json.output.on === false && uOff.json.output.available === false,
+            'available false: off -> 200, still unavailable');
 
         await request('POST', `${admin}/scenario`, {body: scenario('not-running')});
         check(!GLib.file_test(ctlPath, GLib.FileTest.EXISTS), 'not running: no control.json');

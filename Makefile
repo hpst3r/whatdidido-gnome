@@ -38,7 +38,11 @@ test:
 	gjs -m tests/mic_scenarios_test.js $(TEST_RUNTIME)/mic-scenarios
 	gjs -m tests/mic_review_toggle_race_test.js $(TEST_RUNTIME)/mic-toggle-race
 	gjs -m tests/output_model_test.js
+	gjs -m tests/output_indicator_test.js
+	gjs -m tests/output_consent_test.js
+	gjs -m tests/output_forget_test.js
 	gjs -m tests/output_client_test.js $(TEST_RUNTIME)/output-client
+	gjs -m tests/output_fakes_test.js
 	gjs -m tests/day_model_test.js
 	gjs -m tests/popover_model_test.js
 	gjs -m tests/app_client_test.js $(TEST_RUNTIME)/app-client

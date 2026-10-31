@@ -64,13 +64,16 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
             title: 'Output (other participants)',
             description: 'Choose the output from the top-bar menu → Output source. Only that output is ever recorded, ' +
                 'and only after you confirm that everyone being recorded has agreed; if it is not connected the output ' +
-                'stays off. Offered only when the server allows audio capture.',
+                'stays off. Forget output also turns output capture off. Offered only when the server allows audio capture.',
         });
         page.add(output);
         // Same order as the microphone's Forget: the stable id last.
         const OUTPUT_KEYS = ['output-id', 'output-label', 'output-stable-id'];
         const chosenOutput = new Adw.ActionRow({title: 'Chosen output'});
-        const forgetOutput = new Gtk.Button({label: 'Forget output', valign: Gtk.Align.CENTER});
+        const forgetOutput = new Gtk.Button({
+            label: 'Forget output', valign: Gtk.Align.CENTER,
+            tooltip_text: 'Clear the chosen output and turn output capture off',
+        });
         forgetOutput.connect('clicked', () => {
             for (const key of OUTPUT_KEYS)
                 settings.set_string(key, '');

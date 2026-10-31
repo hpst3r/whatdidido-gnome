@@ -270,17 +270,20 @@ class Fakes {
             return this._reply(msg, 200, {mic: st.mic});
         }
         // Output monitor: a scenario without `output` in its status is an
-        // older server (404); one with output.available false is ungated.
+        // older server (the catch-all 403), or with `output_routes` true one
+        // without --allow-audio-capture (409 unavailable). output.available
+        // false is an unreadable inventory: no listing and no on, but off works.
         case 'GET /control/v1/outputs':
             if (!st.output)
-                return this._reply(msg, 404, {error: 'not_found'});
+                return this._noOutput(msg);
             if (!st.output.available)
                 return this._reply(msg, 409, {error: 'unavailable'});
-            return this._reply(msg, 200, {inventory: 'inv1', outputs: this.scenario.outputs ?? []});
+            return this._reply(msg, 200, {inventory: 'inv1',
+                outputs: (this.scenario.outputs ?? []).map(o => ({id: o.id, label: o.label, stable_id: o.stable_id ?? null}))});
         case 'POST /control/v1/output': {
             if (!st.output)
-                return this._reply(msg, 404, {error: 'not_found'});
-            if (!st.output.available)
+                return this._noOutput(msg);
+            if (!st.output.available && body.on)
                 return this._reply(msg, 409, {error: 'unavailable'});
             let output = null;
             if (body.on) {
@@ -291,7 +294,7 @@ class Fakes {
                     return this._reply(msg, 400, {error: 'invalid'});
             }
             st.output = {
-                available: true, on: Boolean(output), source_id: output?.id ?? null,
+                available: st.output.available === true, on: Boolean(output), source_id: output?.id ?? null,
                 stable_id: output?.stable_id ?? null, label: output?.label ?? null,
                 state: !output ? 'off' : st.state === 'recording' ? 'capturing' : 'pending',
                 remembered: false,
@@ -313,8 +316,17 @@ class Fakes {
             st.window_activity.recorded++;
             return this._reply(msg, 202, {recorded: st.state === 'recording'});
         default:
+            // The real router's catch-all for any other /control/ route.
+            if (path.startsWith('/control/'))
+                return this._reply(msg, 403, {error: 'forbidden'});
             return this._reply(msg, 404, {error: 'not_found'});
         }
+    }
+
+    _noOutput(msg) {
+        if (this.scenario.output_routes)
+            return this._reply(msg, 409, {error: 'unavailable'});
+        return this._reply(msg, 403, {error: 'forbidden'});
     }
 
     // ---- app server

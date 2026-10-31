@@ -106,9 +106,12 @@ The extension never picks a microphone you did not choose (issue #1).
 A whatdidido server started with `--allow-audio-capture` can also record an
 output monitor: what this computer plays through one output, such as the
 other people in a call (whatdidido `CONTROL_API.md` Amendment 5). The
-extension shows its controls only when the session reports
-`output.available`; with an older server, or one without audio capture, the
-menu is exactly as before.
+extension shows the Output tile only when the session's status has an
+`output` object; with an older server, or one without audio capture, the
+menu is exactly as before. When the server can't read its device list
+(`output.available` false), the Output source list is hidden, as the Input
+list is for the microphone, and an output that is off can't be turned on;
+one that is on still shows as on, with the speaker icon and a working Off.
 
 - The **Output** tile and the **Output source** list work like the
   Microphone tile and the Input list, with the same choice rules: saved by
@@ -127,7 +130,9 @@ menu is exactly as before.
   on is shown as it is; turn it off with the tile.
 - There is no output reminder notification (the microphone reminder stays
   about the microphone).
-- **Settings → Forget output** clears the choice.
+- **Settings → Forget output** clears the choice and, if output capture is
+  on, also turns it off (once, without asking), so an output the server
+  remembers doesn't keep recording.
 
 ## Pause reminder
 
