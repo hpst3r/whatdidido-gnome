@@ -10,12 +10,20 @@
 // set it is a session of CONTROL_API.md Amendment 4 (window_activity.geometry,
 // optional `monitors` and `changed_at`); without it, an older session that
 // refuses those keys with 400 invalid.
+//
+// Output monitor (CONTROL_API.md Amendment 5): with `outputRoutes` set the
+// fake has GET /control/v1/outputs and POST /control/v1/output; with
+// `outputGate` also set (--allow-audio-capture) its status carries the
+// `output` object right after `mic`. Without the gate the routes answer
+// 409 unavailable after the shape check; without the routes (an older
+// server, the default) there is no `output` key and they are 404.
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
 const BODY_KEYS = {
     '/control/v1/command': [['action']],
     '/control/v1/mic': [['on'], ['on', 'source_id', 'inventory']],
+    '/control/v1/output': [['on'], ['on', 'source_id', 'inventory', 'consent']],
     '/control/v1/interval': [['seconds']],
     '/control/v1/window': [['focus'], ['focus', 'app_id', 'app_name', 'wm_class', 'title']],
 };
@@ -80,6 +88,14 @@ export class FakeControl {
         this.transcription = null;
         this.inventory = 'inv1';
         this.mics = [{id: 'm1', label: 'Built-in'}, {id: 'm2', label: 'USB headset'}];
+        // Output monitor (Amendment 5); one inventory digest for both lists.
+        this.outputRoutes = false;
+        this.outputGate = true;
+        this.outputs = [{id: 'o1', label: 'Built-in Speakers', stable_id: 'alsa_output.pci'},
+            {id: 'o2', label: 'Dock Headphones', stable_id: 'alsa_output.usb-dock'}];
+        this.output = {available: true, on: false, source_id: null, stable_id: null, label: null, state: 'off', remembered: false};
+        this.outputInventoryChanges = 0;  // POST /output answers inventory_changed this many times
+        this.beforeOutputPost = null;     // (body) => void
         // Window activity (--window-activity): off by default, like the server.
         this.windowActivity = false;
         this.windows = [];          // recorded active_window metadata, in order
@@ -148,6 +164,8 @@ export class FakeControl {
 
         let body = null;
         if (method === 'POST') {
+            if (path === '/control/v1/output' && !this.outputRoutes)
+                return this._reply(msg, 404, {error: 'not_found'});
             const tooLarge = path in BODY_LIMIT ? (bytes?.length ?? 0) > BODY_LIMIT[path] : raw.length > 1024;
             if (headers['content-type'] !== 'application/json' || tooLarge)
                 return this._reply(msg, 400, {error: 'invalid'});
@@ -161,16 +179,27 @@ export class FakeControl {
             const keys = Object.keys(body ?? {}).filter(k => !optional.includes(k)).sort().join(',');
             if (!(BODY_KEYS[path] ?? []).some(k => k.slice().sort().join(',') === keys))
                 return this._reply(msg, 400, {error: 'invalid'});
+            // Turning output on needs exactly `consent: true`, checked with the shape.
+            if (path === '/control/v1/output' && (typeof body.on !== 'boolean' || (body.on && body.consent !== true)))
+                return this._reply(msg, 400, {error: 'invalid'});
         }
 
         const route = `${method} ${path}`;
         switch (route) {
         case 'GET /control/v1/status': {
-            const status = {...this.status, ...this._transcriptionStatus()};
+            const status = this._withOutput({...this.status, ...this._transcriptionStatus()});
             return this._reply(msg, 200, this.windowActivity ? {...status, window_activity: this._windowStatus()} : status);
         }
         case 'GET /control/v1/microphones':
             return this._reply(msg, 200, {inventory: this.inventory, microphones: this._micList()});
+        case 'GET /control/v1/outputs':
+            if (!this.outputRoutes)
+                return this._reply(msg, 404, {error: 'not_found'});
+            if (!this.outputGate)
+                return this._reply(msg, 409, {error: 'unavailable'});
+            return this._reply(msg, 200, {inventory: this.inventory, outputs: this.outputs.map(o => ({stable_id: null, ...o}))});
+        case 'POST /control/v1/output':
+            return this._output(msg, body);
         case 'POST /control/v1/command': {
             const allowed = {start: ['stopped', 'failed'], pause: ['recording'], resume: ['paused'],
                 stop: ['starting', 'recording', 'paused', 'recovering']}[body.action];
@@ -223,6 +252,44 @@ export class FakeControl {
         default:
             return this._reply(msg, 404, {error: 'not_found'});
         }
+    }
+
+    // `output` right after `mic`, only on a gated server with the routes.
+    _withOutput(status) {
+        if (!this.outputRoutes || !this.outputGate)
+            return status;
+        const out = {};
+        for (const [k, v] of Object.entries(status)) {
+            out[k] = v;
+            if (k === 'mic')
+                out.output = {...this.output};
+        }
+        return out;
+    }
+
+    _output(msg, body) {
+        if (!this.outputGate)
+            return this._reply(msg, 409, {error: 'unavailable'});
+        let output = null;
+        if (body.on) {
+            this.beforeOutputPost?.(body);
+            if (this.outputInventoryChanges > 0) {
+                this.outputInventoryChanges--;
+                this.inventory = `inv${Number(this.inventory.slice(3)) + 1}`;
+            }
+            if (body.inventory !== this.inventory)
+                return this._reply(msg, 409, {error: 'inventory_changed'});
+            output = this.outputs.find(o => o.id === body.source_id);
+            if (!output)
+                return this._reply(msg, 400, {error: 'invalid'});
+        }
+        this.output = {
+            available: true, on: Boolean(output), source_id: output?.id ?? null,
+            stable_id: output?.stable_id ?? null, label: output?.label ?? null,
+            state: !output ? 'off' : this.status.state === 'recording' ? 'capturing' : 'pending',
+            remembered: false,
+        };
+        return this._reply(msg, 200, {output: {...this.output}});
     }
 
     _micList() {

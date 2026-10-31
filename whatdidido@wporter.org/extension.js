@@ -1,3 +1,4 @@
+import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
@@ -5,8 +6,10 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Dialog from 'resource:///org/gnome/shell/ui/dialog.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
+import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 import {AppClient} from './lib/app_client.js';
@@ -15,6 +18,9 @@ import {localDate} from './lib/day_model.js';
 import {MicController} from './lib/mic_model.js';
 import {MicReminder, MIC_REMINDER_TITLE} from './lib/mic_reminder.js';
 import {buildView, errorText, pollPeriod} from './lib/model.js';
+import {
+    CONSENT_BODY, CONSENT_CANCEL, CONSENT_CONFIRM, CONSENT_TITLE, OUTPUT_KEYS, OutputController, outputErrorText,
+} from './lib/output_model.js';
 import {PauseReminder, REMINDER_TITLE, timerDelay} from './lib/pause_reminder.js';
 import {Popover} from './lib/popover.js';
 import {assignErrorText, popoverView} from './lib/popover_model.js';
@@ -79,6 +85,18 @@ class Indicator extends PanelMenu.Button {
             openSources: () => this._popover.expand('input'),
             changed: () => this._render(),
         });
+        this._consentDialog = null;  // the open output consent dialog, or null
+        this._output = new OutputController({
+            settings: {
+                get: key => this._settings.get_string(key),
+                set: (key, value) => this._settings.set_string(key, value),
+            },
+            setOutputOn: (on, preferred, c) => this._client.setOutputOn(on, preferred, c),
+            readStatus: c => this._client.status(c),
+            confirm: () => this._askOutputConsent(),
+            openSources: () => this._popover.expand('output'),
+            changed: () => this._render(),
+        });
 
         const box = new St.BoxLayout({style_class: 'panel-status-indicators-box wdi-panel-box'});
         this._stateIcon = new St.Icon({
@@ -90,8 +108,14 @@ class Indicator extends PanelMenu.Button {
             style_class: 'system-status-icon wdi-mic-icon',
             visible: false,
         });
+        this._outputIcon = new St.Icon({
+            icon_name: 'audio-speakers-symbolic',
+            style_class: 'system-status-icon wdi-output-icon',
+            visible: false,
+        });
         box.add_child(this._stateIcon);
         box.add_child(this._micIcon);
+        box.add_child(this._outputIcon);
         this.add_child(box);
 
         this._popover = new Popover({
@@ -118,7 +142,8 @@ class Indicator extends PanelMenu.Button {
             this._settings.connect('changed::poll-active', () => this._schedule()),
             this._settings.connect('changed::poll-idle', () => this._schedule()),
             this._settings.connect('changed::show-mic-indicator', () => this._render()),
-            ...['microphone-stable-id', 'microphone-id', 'microphone-label'].map(key =>
+            this._settings.connect('changed::show-output-indicator', () => this._render()),
+            ...['microphone-stable-id', 'microphone-id', 'microphone-label', ...Object.values(OUTPUT_KEYS)].map(key =>
                 this._settings.connect(`changed::${key}`, () => this._render())),
             this._settings.connect('changed::app-url', () => {
                 this._appBase = null;
@@ -141,9 +166,11 @@ class Indicator extends PanelMenu.Button {
             if (open) {
                 this._refresh();
                 this._loadMics();
+                this._loadOutputs();
                 this._loadDay();
             } else {
                 this._mic.menuClosed();
+                this._output.menuClosed();
                 if (this._noticeSeen)
                     this._notice = null;
                 this._noticeSeen = false;
@@ -208,13 +235,14 @@ class Indicator extends PanelMenu.Button {
         }
         this._windowTracker.updateStatus(this._status, this._running);
         this._mic.updateStatus(this._status, this._running);
+        this._output.updateStatus(this._status, this._running);
         this._render();
         this._schedule();
     }
 
-    // Run a control request, then refresh. Failures are shown in the menu.
-    // Resolves to true when fn succeeded.
-    async _act(fn) {
+    // Run a control request, then refresh. Failures are shown in the menu
+    // (text: how an error reads there). Resolves to true when fn succeeded.
+    async _act(fn, text = errorText) {
         let ok = false;
         try {
             await fn(this._actionCancellable);
@@ -223,7 +251,7 @@ class Indicator extends PanelMenu.Button {
         } catch (e) {
             if (isCancelled(e) || this._destroyed)
                 return false;
-            this._notice = errorText(e);
+            this._notice = text(e);
         }
         this._refresh();
         return ok;
@@ -427,6 +455,50 @@ class Indicator extends PanelMenu.Button {
         this._act(c => this._mic.toggle(on, c)).finally(() => this._loadMics());
     }
 
+    // The output tile and list, like the microphone's; turning output on from
+    // off asks for consent first (OutputController, _askOutputConsent).
+    _setOutput(on) {
+        this._act(c => this._output.toggle(on, c), outputErrorText).finally(() => this._loadOutputs());
+    }
+
+    _chooseOutput(item) {
+        this._act(c => this._output.choose(item, c), outputErrorText).finally(() => this._loadOutputs());
+    }
+
+    // The output consent dialog: resolves true only for "Everyone has agreed
+    // — record"; Cancel (the default), Escape, or the dialog going away
+    // without an answer resolve false. The menu closes first, as for the
+    // shell's own dialogs opened from a menu.
+    _askOutputConsent() {
+        if (this._destroyed)
+            return Promise.resolve(false);
+        this._consentDialog?.close();
+        this.menu.close();
+        return new Promise(resolve => {
+            const dialog = new ModalDialog.ModalDialog({styleClass: 'wdi-consent-dialog', destroyOnClose: true});
+            dialog.name = 'wdi-output-consent';
+            let answered = false;
+            const answer = agreed => {
+                if (answered)
+                    return;
+                answered = true;
+                if (this._consentDialog === dialog)
+                    this._consentDialog = null;
+                resolve(agreed);
+                dialog.close();
+            };
+            dialog.contentLayout.add_child(new Dialog.MessageDialogContent({title: CONSENT_TITLE, description: CONSENT_BODY}));
+            const cancel = dialog.addButton({label: CONSENT_CANCEL, action: () => answer(false), key: Clutter.KEY_Escape, default: true});
+            cancel.name = 'wdi-output-consent-cancel';
+            const confirm = dialog.addButton({label: CONSENT_CONFIRM, action: () => answer(true)});
+            confirm.name = 'wdi-output-consent-confirm';
+            dialog.connect('destroy', () => answer(false));
+            this._consentDialog = dialog;
+            if (!dialog.open())
+                answer(false);
+        });
+    }
+
     _setInterval(seconds) {
         this._intervalBusy = true;
         this._render();
@@ -458,6 +530,12 @@ class Indicator extends PanelMenu.Button {
             return null;
         case 'choose-mic':
             this._chooseMic(a.item);
+            return null;
+        case 'output':
+            this._setOutput(a.on);
+            return null;
+        case 'choose-output':
+            this._chooseOutput(a.item);
             return null;
         case 'window':
             this._settings.set_boolean('report-active-window', a.on);
@@ -580,12 +658,34 @@ class Indicator extends PanelMenu.Button {
             this._mic.setInventory(mics);  // also migrates a legacy microphone-id
     }
 
+    // GET /control/v1/outputs on menu open and after an output action, only
+    // while the session offers output capture (output.available).
+    async _loadOutputs() {
+        if (this._destroyed)
+            return;
+        if (!this._running || this._status?.output?.available !== true) {
+            this._output.setInventory(null);
+            return;
+        }
+        let outputs;
+        try {
+            outputs = (await this._client.outputs(this._actionCancellable)).outputs ?? [];
+        } catch (e) {
+            if (isCancelled(e) || this._destroyed)
+                return;
+            outputs = null;
+        }
+        if (!this._destroyed)
+            this._output.setInventory(outputs);
+    }
+
     _render() {
         if (this._destroyed)
             return;
         const view = buildView(this._status, {
             running: this._running,
             showMic: this._settings.get_boolean('show-mic-indicator'),
+            showOutput: this._settings.get_boolean('show-output-indicator'),
             pollError: this._pollError,
             pausedMs: this._reminder.pausedFor(monotonicMs()),
         });
@@ -595,6 +695,7 @@ class Indicator extends PanelMenu.Button {
             this._stateIcon.remove_style_class_name(c);
         this._stateIcon.add_style_class_name(view.panel.styleClass);
         this._micIcon.visible = view.micIndicator;
+        this._outputIcon.visible = view.outputIndicator;
         this.accessible_name = view.accessibleName;
 
         if (this._notice && this.menu.isOpen)
@@ -609,6 +710,9 @@ class Indicator extends PanelMenu.Button {
             mic: this._mic.view(),
             mics: this._mic.mics,
             micChoiceLabel: this._mic.preferred.label,
+            output: this._output.view(),
+            outputs: this._output.outputs,
+            outputChoiceLabel: this._output.preferred.label,
             window: windowSwitchView(this._status, {
                 running: this._running,
                 enabled: this._settings.get_boolean('report-active-window'),
@@ -629,6 +733,9 @@ class Indicator extends PanelMenu.Button {
 
     destroy() {
         this._destroyed = true;
+        // Unanswered: the controller sees Cancel, so nothing is sent.
+        this._consentDialog?.close();
+        this._consentDialog = null;
         this._stopDay();
         this._app.destroy();
         St.Settings.get().disconnectObject(this);

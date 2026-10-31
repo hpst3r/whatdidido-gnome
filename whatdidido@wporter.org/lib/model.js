@@ -112,12 +112,30 @@ export function micSwitch(status, running) {
     };
 }
 
+// The output monitor switch (CONTROL_API.md Amendment 5): the microphone's
+// rules, for a server that reports an `output` object.
+export function outputSwitch(status, running) {
+    const output = status?.output;
+    if (!running || !output)
+        return {sensitive: false, on: false};
+    return {
+        sensitive: output.available === true && MIC_STATES.includes(status.state),
+        on: output.on === true,
+    };
+}
+
 // mic.state in which nothing is or will be captured although mic.on is true
 // (RELIABILITY.md section 4): no live-microphone cue in the top bar.
 const MIC_DEAD_STATES = ['limit_reached', 'failed'];
 
 function micLive(status, running) {
     return running && status.mic?.on === true && !MIC_DEAD_STATES.includes(status.mic.state);
+}
+
+// The same for the output monitor (output.state has the mic's values).
+function outputLive(status, running) {
+    const output = running ? status.output : null;
+    return output?.available === true && output.on === true && !MIC_DEAD_STATES.includes(output.state);
 }
 
 const BUSY = ['starting', 'recording', 'recovering', 'stopping'];
@@ -197,11 +215,13 @@ export function errorText(err) {
 // running (no control file, connection refused, ...); pollError is shown
 // under the header for other failures (e.g. a rejected token). pausedMs: how
 // long the session has been paused (PauseReminder.pausedFor), or null.
-export function buildView(status, {running = true, showMic = true, pollError = null, pausedMs = null} = {}) {
+// showMic / showOutput: the show-mic-indicator / show-output-indicator settings.
+export function buildView(status, {running = true, showMic = true, showOutput = true, pollError = null, pausedMs = null} = {}) {
     running = running && !!status;
     const state = running ? status.state : null;
     const mic = micSwitch(status, running);
     const live = micLive(status, running);
+    const outputOn = outputLive(status, running);
     const panel = panelState(state, running);
     const header = running ? headerText(status) : {title: NOT_RUNNING_TEXT, detail: pollError ?? ''};
     if (state === 'paused' && pausedMs !== null)
@@ -211,7 +231,8 @@ export function buildView(status, {running = true, showMic = true, pollError = n
         state,
         panel,
         micIndicator: live && showMic,
-        accessibleName: `whatdidido: ${panel.label}${live ? ', microphone on' : ''}`,
+        outputIndicator: outputOn && showOutput,
+        accessibleName: `whatdidido: ${panel.label}${live ? ', microphone on' : ''}${outputOn ? ', output on' : ''}`,
         header,
         actions: allowedActions(state),
         mic,

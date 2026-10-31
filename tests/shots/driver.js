@@ -76,7 +76,8 @@ function merge(base, over) {
 }
 
 // `extends` inherits everything but description, tags, steps and expectations.
-const OWN_KEYS = ['description', 'tags', 'steps', 'expect_labels', 'expect_requests', 'expect_status', 'paused_minutes'];
+const OWN_KEYS = ['description', 'tags', 'steps', 'expect_labels', 'expect_requests', 'expect_no_requests', 'expect_status',
+    'paused_minutes', 'shot'];
 
 function loadScenario(name, seen = []) {
     if (seen.includes(name))
@@ -266,6 +267,7 @@ async function runScenario(ctx, sc, variant) {
     const {shell, admin} = ctx;
     const notes = [];
     const park = ctx.park;
+    await shell.call('CloseDialog');
     await shell.call('CloseMenu');
     await shell.call('PointerMove', '(dd)', park);
 
@@ -302,6 +304,8 @@ async function runScenario(ctx, sc, variant) {
         hovering = false;
         if ('click' in step) {
             await shell.call('Click', '(s)', [step.click]);
+        } else if ('dialogClick' in step) {
+            await shell.call('DialogClick', '(s)', [step.dialogClick]);
         } else if ('clickLabel' in step) {
             await shell.call('ClickLabel', '(s)', [step.clickLabel]);
         } else if ('hover' in step) {
@@ -333,6 +337,9 @@ async function runScenario(ctx, sc, variant) {
         await fakesQuiet(admin);
     }
 
+    if (sc.shot === 'dialog')
+        return shootDialog(ctx, sc, variant, notes);
+
     // A menu item's activation closes the menu (today's menu): show the
     // result by opening it again.
     let mb = await shell.json('MenuBounds');
@@ -357,22 +364,55 @@ async function runScenario(ctx, sc, variant) {
     if (png[1] !== want[0] || png[2] !== want[1])
         throw new Failure(`PNG is ${png[1]}x${png[2]}, expected ${want[0]}x${want[1]} (crop ${crop.width}x${crop.height})`);
 
-    const labels = await shell.json('MenuLabels');
+    await checkExpectations(ctx, sc, await shell.json('MenuLabels'), 'menu');
+    await shell.call('CloseMenu');
+    return {path, crop, menu: mb.menu, notes};
+}
+
+async function checkExpectations({admin}, sc, labels, where) {
     for (const want of sc.expect_labels ?? []) {
         if (!labels.includes(want))
-            throw new Failure(`label "${want}" not in the menu (labels: ${JSON.stringify(labels)})`);
+            throw new Failure(`label "${want}" not in the ${where} (labels: ${JSON.stringify(labels)})`);
     }
     const st = await admin.state();
     for (const want of sc.expect_requests ?? []) {
         if (!st.requests.some(r => r.method === want.method && r.path === want.path))
             throw new Failure(`the extension never sent ${want.method} ${want.path}`);
     }
+    for (const want of sc.expect_no_requests ?? []) {
+        if (st.requests.some(r => r.method === want.method && r.path === want.path))
+            throw new Failure(`the extension sent ${want.method} ${want.path}`);
+    }
     for (const [k, v] of Object.entries(sc.expect_status ?? {})) {
         if (st.status?.[k] !== v)
             throw new Failure(`fake status ${k} is ${JSON.stringify(st.status?.[k])}, expected ${JSON.stringify(v)}`);
     }
-    await shell.call('CloseMenu');
-    return {path, crop, menu: mb.menu, notes};
+}
+
+// `"shot": "dialog"`: the extension's modal dialog a step opened (the output
+// consent dialog), cropped to its box, then closed as Cancel would.
+async function shootDialog(ctx, sc, variant, notes) {
+    const {shell} = ctx;
+    let db = null;
+    await waitFor('the extension dialog', 5000, async () => {
+        db = await shell.json('DialogBounds');
+        return db.open && db.box;
+    });
+    await shell.call('PointerMove', '(dd)', ctx.park);
+    const settled = await shell.json('SettleDialog');
+    if (!settled.settled)
+        notes.push(`dialog still moving after ${settled.ms} ms`);
+    db = await shell.json('DialogBounds');
+    const crop = cropRect({menu: db.box, button: null, monitor: db.monitor}, ctx.scale);
+    const path = GLib.build_filenamev([ctx.out, `${sc.name}-${variant}.png`]);
+    await shell.json('Screenshot', '(siiii)', [path, crop.x, crop.y, crop.width, crop.height], 30000);
+    const png = GdkPixbuf.Pixbuf.get_file_info(path);
+    const want = [Math.round(crop.width * ctx.pixels), Math.round(crop.height * ctx.pixels)];
+    if (png[1] !== want[0] || png[2] !== want[1])
+        throw new Failure(`PNG is ${png[1]}x${png[2]}, expected ${want[0]}x${want[1]} (crop ${crop.width}x${crop.height})`);
+    await checkExpectations(ctx, sc, await shell.json('DialogLabels'), 'dialog');
+    await shell.call('CloseDialog');
+    return {path, crop, menu: db.box, notes};
 }
 
 async function main() {

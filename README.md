@@ -7,7 +7,8 @@ session. It talks to the work-session server's local control API
 - **Top bar:** a state icon — recording (red record dot), paused, reconnecting,
   stopped, failed, or server not running — each with its own icon shape, plus a
   small microphone icon while the microphone is on and not stopped for good
-  (limit reached, failed); it can be turned off in settings.
+  (limit reached, failed), and a speaker icon by the same rules while output
+  capture is on; each can be turned off in settings.
 - **Popover** (the menu; it looks like the whatdidido app's own capture
   popover in its GNOME skin, inside the shell's popup, light or dark with the
   shell's style and in your accent color), top to bottom:
@@ -19,14 +20,19 @@ session. It talks to the work-session server's local control API
     no work session runs: "Capture not running";
   - notices, each only when present: the last failed action, the session's
     last error, the microphone hint ("Choose a microphone", "USB headset is
+    not connected"), the output hint ("Choose an output", "Dock Headphones is
     not connected"), an invalid app server URL in Settings;
   - tiles: **Microphone** (on/off, "On · USB headset (waiting for device)"
-    with the microphone the session actually uses and its trouble), **PHI
+    with the microphone the session actually uses and its trouble),
+    **Output** (output capture, [only when the server offers
+    it](#output-capture-other-participants): "On · Dock Headphones", "Off ·
+    Dock Headphones" or "Choose an output"), **PHI
     guard** ("3 frames withheld", when the server reports it; opens those
     frames in the app's Timeline) and **Active window** (the "Record active
     window" setting);
   - **Input**: the microphone; click to pick another in a list below (the
     saved choice is checked);
+  - **Output source** (with the Output tile): the output, picked the same way;
   - **Screenshot interval**: a slider over the app's stops, 5 s to 1 h; it
     commits on release (keyboard and scroll wheel: 600 ms after the last
     step);
@@ -94,6 +100,34 @@ The extension never picks a microphone you did not choose (issue #1).
   device has since been renumbered (reconnect, reboot) must be picked again
   once; until then the popover says it is not connected.
 - **Settings → Forget microphone** clears the choice.
+
+## Output capture (other participants)
+
+A whatdidido server started with `--allow-audio-capture` can also record an
+output monitor: what this computer plays through one output, such as the
+other people in a call (whatdidido `CONTROL_API.md` Amendment 5). The
+extension shows its controls only when the session reports
+`output.available`; with an older server, or one without audio capture, the
+menu is exactly as before.
+
+- The **Output** tile and the **Output source** list work like the
+  Microphone tile and the Input list, with the same choice rules: saved by
+  stable id, never another output, "Choose an output" with no saved choice,
+  "Dock Headphones is not connected" when it is missing.
+- **Consent.** Turning output capture on from off, with the tile or by
+  picking an output after the tile asked you to choose one, first closes the
+  menu and asks "Record the output?" with the session page's warning.
+  **Cancel** (the default, also Escape) sends nothing; only **Everyone has
+  agreed — record** turns it on, telling the server that you confirmed
+  everyone being recorded has agreed. Every turn-on asks again.
+- Picking another output while one is on switches over without asking;
+  picking one while the output is off and the tile didn't ask only saves it.
+- Status polling never turns the output on or off and never asks. An output
+  the server remembers (`--remember-output`) or that the session page turned
+  on is shown as it is; turn it off with the tile.
+- There is no output reminder notification (the microphone reminder stays
+  about the microphone).
+- **Settings → Forget output** clears the choice.
 
 ## Pause reminder
 
@@ -354,7 +388,8 @@ active window** on, the extension:
   the token is never sent anywhere else.
 - The token is never stored in dconf/GSettings and never logged; error
   messages never include it. Settings hold only poll intervals, the chosen
-  microphone's stable id, opaque id and label, the indicator toggle, the active-window
+  microphone's and the chosen output's stable id, opaque id and label, the
+  indicator toggles, the active-window
   switch, the excluded app ids, the window title rules, the digit-change
   switch, the pause- and microphone-reminder delays and the app server URL.
 - Requests carry `Authorization: Bearer …` and no `Origin`, `Cookie` or
@@ -363,7 +398,8 @@ active window** on, the extension:
   carry the control token, and carry no `Authorization`, `Origin`, `Cookie`
   or `Sec-Fetch-*` headers: the app server treats them as the local user.
 - Microphone capture is only offered when the server was started with
-  `--allow-audio-capture`; otherwise the switch is insensitive.
+  `--allow-audio-capture`; otherwise the switch is insensitive. Output
+  capture is offered only then too, and each turn-on asks for consent first.
 - Window titles, app ids/names and WM classes are sent only to the loopback
   work session from the control file, only while it is recording (or paused,
   to a session whose at-rest guard is configured; those reports are not
@@ -389,6 +425,10 @@ active window** on, the extension:
 | `microphone-id` | empty | chosen microphone's opaque id; only used without a stable id; never a fallback to another microphone |
 | `microphone-label` | empty | chosen microphone's name, for messages |
 | `show-mic-indicator` | true | microphone icon in the top bar while it is on |
+| `output-stable-id` | empty | chosen output, from the menu (stable across reconnects); empty = none chosen |
+| `output-id` | empty | chosen output's opaque id; only used without a stable id; never a fallback to another output |
+| `output-label` | empty | chosen output's name, for messages |
+| `show-output-indicator` | true | speaker icon in the top bar while output capture is on |
 | `report-active-window` | true | report the focused window while recording (server needs `--window-activity`) |
 | `window-title-excluded-apps` | empty | app ids (with or without `.desktop`) whose titles are sent empty; comma-separated in Settings |
 | `window-title-rules` | empty | `a(sss)`: (app, pattern, label); the first match replaces the title; any unusable entry empties every title ([Title rules](#title-rules)) |
@@ -421,7 +461,9 @@ untouched. It needs `mutter-devkit` (GNOME 49+). The nested shell shares
 allowed actions, header text, poll period, control-file validation), so it is
 unit-tested with plain `gjs -m`. `lib/mic_model.js` likewise holds the
 microphone choice (matching, migration, the popover's texts and the
-`MicController` behind the mic tile and the input list). Likewise
+`MicController` behind the mic tile and the input list), and
+`lib/output_model.js` the same for output capture plus the consent decision
+(`OutputController`; the dialog itself is in `extension.js`). Likewise
 `lib/window_model.js` holds the active-window rules (payload, sanitising,
 title rules and their glob matcher, the digit-only change filter,
 debounce/spacing/retry scheduler on an injected clock, availability gating,
