@@ -1,0 +1,28 @@
+{
+  "extends": "recording-full",
+  "description": "Recording with the microphone and the output monitor on (USB Dock Headphones, remembered): the Output tile is on with its label, the Output source picker shows it, and the top bar has the speaker icon.",
+  "tags": ["state", "output"],
+  "control": {
+    "status": {
+      "output": {
+        "available": true,
+        "on": true,
+        "source_id": "77",
+        "stable_id": "alsa_output.usb-Example_Dock-00.analog-stereo",
+        "label": "USB Dock Headphones",
+        "state": "capturing",
+        "remembered": true
+      }
+    }
+  },
+  "outputs": [
+    {"id": "77", "label": "USB Dock Headphones", "stable_id": "alsa_output.usb-Example_Dock-00.analog-stereo"},
+    {"id": "64", "label": "Built-in Audio Speakers", "stable_id": "alsa_output.pci-0000_00_1f.3.analog-stereo"}
+  ],
+  "settings": {
+    "output-stable-id": "alsa_output.usb-Example_Dock-00.analog-stereo",
+    "output-id": "77",
+    "output-label": "USB Dock Headphones"
+  },
+  "expect_labels": ["Output", "On · USB Dock Headphones", "Output source", "3 monitors · every 5 s · mic on"]
+}

@@ -9,8 +9,10 @@
 //   {action: 'command', command}            POST /control/v1/command (start, pause, resume, stop)
 //   {action: 'mic', on}                     MicController.toggle(on)
 //   {action: 'choose-mic', item}            MicController.choose(item) (a mic_model source item)
+//   {action: 'output', on}                  OutputController.toggle(on) (output_model.js)
+//   {action: 'choose-output', item}         OutputController.choose(item)
 //   {action: 'window', on}                  set report-active-window
-//   {action: 'expand', list}                show inline list 'input' | 'ticket' (null: collapse)
+//   {action: 'expand', list}                show inline list 'input' | 'output' | 'ticket' (null: collapse)
 //   {action: 'pick-ticket', ticket}         remember the picked ticket
 //   {action: 'assign', body}                AppClient.assign(body)
 //   {action: 'ask-stop'} / {action: 'cancel-stop'}   the footer's stop confirmation
@@ -18,7 +20,8 @@
 // Links are {view, params} for AppClient.url(view, params).
 
 import {activeMicLabel, micSwitchLabel} from './mic_model.js';
-import {allowedActions, lastErrorText, micSwitch, stateLabel} from './model.js';
+import {allowedActions, lastErrorText, micSwitch, outputSwitch, stateLabel} from './model.js';
+import {OUTPUT_CHOOSE_TEXT, activeOutputLabel, outputAvailable, outputOffered, outputTrouble} from './output_model.js';
 import {pausedForText} from './pause_reminder.js';
 import {
     appInitials, clockTime, currentStretch, hhmm, lastEntry, lastFocus, localDate, sparkBuckets, ticketColor,
@@ -222,6 +225,35 @@ function micTile(status, running, mics) {
     };
 }
 
+// The Output tile (Amendment 3): only when the status has an `output` object.
+// With output.available false an off tile is greyed out like the
+// microphone's; one that is on keeps its Off.
+function outputTile(status, running, outputs, choiceLabel) {
+    const visible = outputOffered(status, running);
+    const output = visible ? status.output : null;
+    const sw = outputSwitch(status, running);
+    let subtitle;
+    if (output?.on === true)
+        subtitle = `On · ${activeOutputLabel(output, outputs) ?? 'output'}${outputTrouble(output)}`;
+    else if (!outputAvailable(status, running))
+        subtitle = 'Off · outputs unavailable';
+    else
+        subtitle = choiceLabel ? `Off · ${choiceLabel}` : OUTPUT_CHOOSE_TEXT;
+    const on = visible && sw.on;
+    return {
+        name: 'wdi-pop-output',
+        visible,
+        title: 'Output',
+        accessibleName: 'Output (other participants)',
+        subtitle,
+        icon: 'audio-speakers-symbolic',
+        on,
+        accent: on,
+        sensitive: visible && sw.sensitive,
+        action: {action: 'output', on: !on},
+    };
+}
+
 function phiTile(status, running, base, date) {
     const n = running ? status.describe_withheld : undefined;
     const visible = typeof n === 'number' && Number.isFinite(n);
@@ -286,6 +318,37 @@ function inputBlock(status, running, micView, mics, micChoiceLabel, expanded) {
             action: {action: 'choose-mic', item},
         })),
         emptyText: sources.length ? null : Array.isArray(mics) ? 'No microphones found' : 'Microphones unavailable',
+    };
+}
+
+// The Output source picker, like the Input picker, below it: only while
+// output.available is true.
+function outputBlock(status, running, outputView, outputs, choiceLabel, expanded) {
+    const visible = outputAvailable(status, running);
+    const output = visible ? status.output : null;
+    const sources = Array.isArray(outputView?.sources) ? outputView.sources : [];
+    const active = output?.on === true ? activeOutputLabel(output, outputs) : null;
+    const saved = choiceLabel || sources.find(s => s.checked)?.label || '';
+    const value = active || saved || 'Choose…';
+    const open = visible && expanded === 'output';
+    return {
+        name: 'wdi-pop-output-source',
+        visible,
+        title: 'Output source',
+        value,
+        accessibleName: `Output source: ${value}`,
+        expanded: open,
+        sensitive: visible,
+        action: {action: 'expand', list: open ? null : 'output'},
+        items: sources.map((item, index) => ({
+            index,
+            name: `wdi-pop-output-item-${index}`,
+            label: item.label,
+            checked: !!item.checked,
+            accessibleName: item.label,
+            action: {action: 'choose-output', item},
+        })),
+        emptyText: sources.length ? null : Array.isArray(outputs) ? 'No outputs found' : 'Outputs unavailable',
     };
 }
 
@@ -485,6 +548,9 @@ function footerBlock(status, running, ui) {
  * @param {{switchLabel: string, hint: string|null, sources: Array}} [opts.mic] MicController.view()
  * @param {Array|null} [opts.mics] MicController.mics (inventory; null = unknown)
  * @param {string} [opts.micChoiceLabel] the saved choice's label (MicController.preferred.label)
+ * @param {{hint: string|null, sources: Array}} [opts.output] OutputController.view()
+ * @param {Array|null} [opts.outputs] OutputController.outputs (inventory; null = unknown)
+ * @param {string} [opts.outputChoiceLabel] the saved output's label (OutputController.preferred.label)
  * @param {{sensitive: boolean, on: boolean, label: string}} [opts.window] windowSwitchView()
  * @param {{base: string|null, day: object|null, invalidSetting: boolean}} [opts.app]
  *   app server origin (null: none), the TimesheetDay (null: none / 404 / not loaded),
@@ -493,7 +559,7 @@ function footerBlock(status, running, ui) {
  * @param {boolean} [opts.use24h] clock-format is 24h
  * @param {'light'|'dark'} [opts.variant]
  * @param {object} [opts.ui] widget state:
- *   expanded: 'input' | 'ticket' | null; ticket: the picked ticket ('' none);
+ *   expanded: 'input' | 'output' | 'ticket' | null; ticket: the picked ticket ('' none);
  *   assignBusy: bool; assignError: string|null (assignErrorText); stopConfirm: bool;
  *   dragIndex: index into INTERVAL_STEPS while dragging or committing, else null;
  *   hold: {index, seconds, until (nowMs clock)} after a commit, else null (heldIndex);
@@ -508,10 +574,12 @@ function footerBlock(status, running, ui) {
  *            primary: null | {name, icon, accessibleName, accent, sensitive, action}}
  *   notices [{index, name, text}]
  *   tiles   {visible, mic: {name, visible, title, subtitle, icon, on, accent, sensitive, action, accessibleName},
+ *            output: {...as mic} (visible only when the status has an `output` object),
  *            phi: {name, visible, title, subtitle, count, icon, sensitive, link, accessibleName},
  *            window: {name, visible, title, subtitle, icon, on, accent, sensitive, action, accessibleName}}
  *   input   {name, visible, title, value, expanded, sensitive, action, accessibleName, emptyText (or null),
  *            items: [{index, name, label, checked, accessibleName, action}]}
+ *   outputSource {...as input} (the Output source picker; visible only while output.available is true)
  *   interval {name, visible, title, value, steps, index, max, fraction (0..1), seconds (shown),
  *            sessionSeconds (the status's), dragging, holding, sensitive, accessibleName}
  *   now     {name, visible, dimmed, overline, error (or null),
@@ -532,6 +600,7 @@ function footerBlock(status, running, ui) {
 export function popoverView(status, opts = {}) {
     const {
         pollError = null, notice = null, pausedMs = null, mic: micView = null, mics = null, micChoiceLabel = '',
+        output: outputView = null, outputs = null, outputChoiceLabel = '',
         window: win = null, app = {}, nowMs = Date.now(), use24h = false, ui = {},
     } = opts;
     const variant = opts.variant === 'light' ? 'light' : 'dark';
@@ -548,6 +617,8 @@ export function popoverView(status, opts = {}) {
         notices.push(lastError);
     if (micView?.hint)
         notices.push(micView.hint);
+    if (outputView?.hint)
+        notices.push(outputView.hint);
     if (app?.invalidSetting)
         notices.push(APP_URL_NOTICE);
 
@@ -566,10 +637,12 @@ export function popoverView(status, opts = {}) {
         tiles: {
             visible: running,
             mic: micTile(status, running, mics),
+            output: outputTile(status, running, outputs, outputChoiceLabel),
             phi: phiTile(status, running, base, date),
             window: windowTile(win, running),
         },
         input: inputBlock(status, running, micView, mics, micChoiceLabel, ui.expanded),
+        outputSource: outputBlock(status, running, outputView, outputs, outputChoiceLabel, ui.expanded),
         interval: intervalBlock(status, running, ui.dragIndex, ui.hold ?? null, nowMs, !!ui.intervalBusy),
         now: nowBlock(day, base, running && status.state === 'recording', use24h, ui),
         today: todayBlock(day, base, use24h, variant, ui.hoverBar),

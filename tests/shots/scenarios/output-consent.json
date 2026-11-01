@@ -1,0 +1,19 @@
+{
+  "extends": "output-on",
+  "description": "Output off with a saved output; clicking the Output tile closes the menu and asks for consent in a modal dialog (Cancel is the default). Nothing is sent before the answer.",
+  "tags": ["needs-popover", "click", "output", "dialog"],
+  "control": {
+    "status": {
+      "output": {"on": false, "source_id": null, "stable_id": null, "label": null, "state": "off", "remembered": false}
+    }
+  },
+  "steps": [{"click": "wdi-pop-output"}, {"wait_ms": 300}],
+  "shot": "dialog",
+  "expect_labels": [
+    "Record the output?",
+    "Output capture records everything this computer plays through the selected output, including other people's voices in calls and meetings. Enable it only when everyone being recorded has agreed.",
+    "Cancel",
+    "Everyone has agreed — record"
+  ],
+  "expect_no_requests": [{"method": "POST", "path": "/control/v1/output"}]
+}

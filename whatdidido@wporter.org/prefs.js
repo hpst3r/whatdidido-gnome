@@ -60,6 +60,41 @@ export default class WhatdididoPrefs extends ExtensionPreferences {
         const ids = MIC_KEYS.map(key => settings.connect(`changed::${key}`, sync));
         sync();
 
+        const output = new Adw.PreferencesGroup({
+            title: 'Output (other participants)',
+            description: 'Choose the output from the top-bar menu → Output source. Only that output is ever recorded, ' +
+                'and only after you confirm that everyone being recorded has agreed; if it is not connected the output ' +
+                'stays off. Forget output also turns output capture off. Offered only when the server allows audio capture.',
+        });
+        page.add(output);
+        // Same order as the microphone's Forget: the stable id last.
+        const OUTPUT_KEYS = ['output-id', 'output-label', 'output-stable-id'];
+        const chosenOutput = new Adw.ActionRow({title: 'Chosen output'});
+        const forgetOutput = new Gtk.Button({
+            label: 'Forget output', valign: Gtk.Align.CENTER,
+            tooltip_text: 'Clear the chosen output and turn output capture off',
+        });
+        forgetOutput.connect('clicked', () => {
+            for (const key of OUTPUT_KEYS)
+                settings.set_string(key, '');
+        });
+        chosenOutput.add_suffix(forgetOutput);
+        output.add(chosenOutput);
+        const syncOutput = () => {
+            const chosen = !!(settings.get_string('output-stable-id') || settings.get_string('output-id'));
+            const label = settings.get_string('output-label');
+            chosenOutput.subtitle = chosen ? label || 'Unnamed output' : 'None chosen';
+            forgetOutput.sensitive = OUTPUT_KEYS.some(key => settings.get_string(key));
+        };
+        ids.push(...OUTPUT_KEYS.map(key => settings.connect(`changed::${key}`, syncOutput)));
+        syncOutput();
+        const outputIndicator = new Adw.SwitchRow({
+            title: 'Show output icon in the top bar',
+            subtitle: 'A speaker icon while output capture is on',
+        });
+        settings.bind('show-output-indicator', outputIndicator, 'active', Gio.SettingsBindFlags.DEFAULT);
+        output.add(outputIndicator);
+
         const activity = new Adw.PreferencesGroup({
             title: 'Active window',
             description: 'Only sent to the local work session, only while it is recording (or paused, to a ' +

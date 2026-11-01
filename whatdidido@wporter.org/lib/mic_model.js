@@ -11,7 +11,7 @@ export const MIC_KEYS = {stableId: 'microphone-stable-id', id: 'microphone-id', 
 export const CHOOSE_TEXT = 'Choose a microphone';
 
 // mic.state (RELIABILITY.md section 4) that the menu spells out.
-const STATE_TEXT = {
+export const STATE_TEXT = {
     waiting_for_device: 'waiting for device',
     retrying: 'restarting',
     limit_reached: 'limit reached',

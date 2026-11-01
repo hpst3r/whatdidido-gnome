@@ -94,6 +94,14 @@ const IFACE_XML = `
     </method>
     <method name="KeyFocus"><arg type="s" direction="out"/></method>
     <method name="RefreshDay"><arg type="b" direction="out"/></method>
+    <method name="DialogBounds"><arg type="s" direction="out"/></method>
+    <method name="DialogLabels"><arg type="s" direction="out"/></method>
+    <method name="DialogClick">
+      <arg name="name" type="s" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="SettleDialog"><arg type="s" direction="out"/></method>
+    <method name="CloseDialog"/>
     <method name="Log">
       <arg name="message" type="s" direction="in"/>
     </method>
@@ -559,6 +567,88 @@ class ShotsService {
             return false;
         indicator._loadDay();
         return true;
+    }
+
+    // The extension's modal dialogs (the output consent dialog): a ModalDialog
+    // named wdi-* in the shell's modal dialog group, or null.
+    _dialog() {
+        return Main.layoutManager.modalDialogGroup.get_children()
+            .find(a => a.get_name()?.startsWith('wdi-') && a.visible) ?? null;
+    }
+
+    _openDialog() {
+        const dialog = this._dialog();
+        if (!dialog)
+            throw new Error('no extension dialog is open');
+        return dialog;
+    }
+
+    // The dialog's visible box (the parent of its public contentLayout).
+    DialogBounds() {
+        const dialog = this._dialog();
+        const box = dialog?.contentLayout?.get_parent();
+        return JSON.stringify({
+            open: Boolean(dialog),
+            name: dialog?.get_name() ?? null,
+            box: box?.is_mapped() ? bounds(box) : null,
+            monitor: (({x, y, width, height}) => ({x, y, width, height}))(Main.layoutManager.primaryMonitor),
+        });
+    }
+
+    // Label texts and the buttons' labels (a button's own text is not an
+    // St.Label child).
+    DialogLabels() {
+        const labels = [];
+        walk(this._openDialog(), a => {
+            if (a instanceof St.Label && a.is_mapped() && a.get_text())
+                labels.push(a.get_text());
+            else if (a instanceof St.Button && a.is_mapped() && a.label)
+                labels.push(a.label);
+        });
+        return JSON.stringify(labels);
+    }
+
+    DialogClickAsync([name], invocation) {
+        reply(invocation, '(s)', async () => {
+            let found = null;
+            walk(this._openDialog(), a => {
+                if (!found && a.get_name() === name)
+                    found = a;
+            });
+            if (!found)
+                throw new Error(`no actor named ${name} in the dialog`);
+            const t = this._target(found, name);
+            await this._click(t.x, t.y);
+            return JSON.stringify(t.bounds);
+        });
+    }
+
+    // No transition on the dialog's actors for SETTLE_QUIET_MS (its fade).
+    SettleDialogAsync(_args, invocation) {
+        reply(invocation, '(s)', async () => {
+            const start = GLib.get_monotonic_time() / 1000;
+            let quietSince = start;
+            for (;;) {
+                const dialog = this._openDialog();
+                const now = GLib.get_monotonic_time() / 1000;
+                let busy = false;
+                walk(dialog, a => {
+                    busy ||= EASED_PROPS.some(p => a.get_transition(p));
+                });
+                if (busy)
+                    quietSince = now;
+                if (now - quietSince >= SETTLE_QUIET_MS)
+                    return JSON.stringify({settled: true, ms: Math.round(now - start)});
+                if (now - start > SETTLE_MAX_MS)
+                    return JSON.stringify({settled: false, ms: Math.round(now - start)});
+                await delay(50);
+            }
+        });
+    }
+
+    // Closes an extension dialog left open (a failed shot), as Cancel would.
+    CloseDialog() {
+        this._dialog()?.close?.();
     }
 
     Log(message) {

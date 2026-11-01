@@ -32,6 +32,25 @@
       <default>true</default>
       <summary>Show a microphone icon in the top bar while the microphone is on</summary>
     </key>
+    <key name="output-stable-id" type="s">
+      <default>''</default>
+      <summary>Chosen output (stable id)</summary>
+      <description>The chosen output monitor's stable id from the server's output list (PipeWire node name); it survives reconnects. Empty = none chosen. Output capture is only ever turned on with the chosen output, after the consent dialog; if it is not connected the output stays off.</description>
+    </key>
+    <key name="output-id" type="s">
+      <default>''</default>
+      <summary>Chosen output id (legacy)</summary>
+      <description>The chosen output's opaque id from the server's output list. It changes when the device reconnects, so it is only used when no stable id is known. Empty, or not currently present, = no output; there is no fallback to another one.</description>
+    </key>
+    <key name="output-label" type="s">
+      <default>''</default>
+      <summary>Label of the chosen output</summary>
+      <description>Stored when the output is chosen in the menu; shown in the menu and in messages such as "… is not connected".</description>
+    </key>
+    <key name="show-output-indicator" type="b">
+      <default>true</default>
+      <summary>Show a speaker icon in the top bar while output capture is on</summary>
+    </key>
     <key name="report-active-window" type="b">
       <default>true</default>
       <summary>Report the focused window to the work session</summary>

@@ -33,6 +33,7 @@ const STATES = ['active', 'idle', 'locked', 'paused', 'recovering', 'untracked']
 const BODY_KEYS = {
     '/control/v1/command': [['action']],
     '/control/v1/mic': [['on'], ['inventory', 'on', 'source_id']],
+    '/control/v1/output': [['on'], ['consent', 'inventory', 'on', 'source_id']],
     '/control/v1/interval': [['seconds']],
     '/control/v1/window': [['focus'], ['app_id', 'app_name', 'focus', 'title', 'wm_class']],
 };
@@ -220,6 +221,9 @@ class Fakes {
             const keys = Object.keys(body ?? {}).sort().join(',');
             if (!body || req.raw.length > limit || !(BODY_KEYS[path] ?? []).some(k => k.join(',') === keys))
                 return this._reply(msg, 400, {error: 'invalid'});
+            // Output on needs exactly `consent: true` (CONTROL_API.md Amendment 5).
+            if (path === '/control/v1/output' && (typeof body.on !== 'boolean' || (body.on && body.consent !== true)))
+                return this._reply(msg, 400, {error: 'invalid'});
         }
 
         const st = this.status;
@@ -238,8 +242,10 @@ class Fakes {
             st.state = AFTER[body.action];
             st.last_error = null;
             st.waiting_for_unlock = false;
-            if (st.mic?.on)
-                st.mic.state = st.state === 'recording' ? 'capturing' : 'pending';
+            for (const role of [st.mic, st.output]) {
+                if (role?.on)
+                    role.state = st.state === 'recording' ? 'capturing' : 'pending';
+            }
             return this._reply(msg, 202, {state: st.state});
         }
         case 'POST /control/v1/mic': {
@@ -263,6 +269,41 @@ class Fakes {
                 st.audio_state = st.mic.state;
             return this._reply(msg, 200, {mic: st.mic});
         }
+        // Output monitor: a scenario without `output` in its status is an
+        // older server (the catch-all 403), or with `output_routes` true one
+        // without --allow-audio-capture (409 unavailable). output.available
+        // false is an unreadable inventory: no listing and no on, but off works.
+        case 'GET /control/v1/outputs':
+            if (!st.output)
+                return this._noOutput(msg);
+            if (!st.output.available)
+                return this._reply(msg, 409, {error: 'unavailable'});
+            return this._reply(msg, 200, {inventory: 'inv1',
+                outputs: (this.scenario.outputs ?? []).map(o => ({id: o.id, label: o.label, stable_id: o.stable_id ?? null}))});
+        case 'POST /control/v1/output': {
+            if (!st.output)
+                return this._noOutput(msg);
+            if (!st.output.available && body.on)
+                return this._reply(msg, 409, {error: 'unavailable'});
+            let output = null;
+            if (body.on) {
+                if (body.inventory !== 'inv1')
+                    return this._reply(msg, 409, {error: 'inventory_changed'});
+                output = (this.scenario.outputs ?? []).find(o => o.id === body.source_id);
+                if (!output)
+                    return this._reply(msg, 400, {error: 'invalid'});
+            }
+            st.output = {
+                available: st.output.available === true, on: Boolean(output), source_id: output?.id ?? null,
+                stable_id: output?.stable_id ?? null, label: output?.label ?? null,
+                state: !output ? 'off' : st.state === 'recording' ? 'capturing' : 'pending',
+                remembered: false,
+            };
+            // audio_state is the microphone's while one is selected.
+            if ('audio_state' in st && !st.mic?.on)
+                st.audio_state = st.output.state;
+            return this._reply(msg, 200, {output: st.output});
+        }
         case 'POST /control/v1/interval':
             if (!Number.isInteger(body.seconds) || body.seconds < 5 || body.seconds > 3600)
                 return this._reply(msg, 400, {error: 'invalid'});
@@ -275,8 +316,17 @@ class Fakes {
             st.window_activity.recorded++;
             return this._reply(msg, 202, {recorded: st.state === 'recording'});
         default:
+            // The real router's catch-all for any other /control/ route.
+            if (path.startsWith('/control/'))
+                return this._reply(msg, 403, {error: 'forbidden'});
             return this._reply(msg, 404, {error: 'not_found'});
         }
+    }
+
+    _noOutput(msg) {
+        if (this.scenario.output_routes)
+            return this._reply(msg, 409, {error: 'unavailable'});
+        return this._reply(msg, 403, {error: 'forbidden'});
     }
 
     // ---- app server

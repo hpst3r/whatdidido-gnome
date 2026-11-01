@@ -1,0 +1,8 @@
+{
+  "extends": "output-consent",
+  "description": "The consent dialog confirmed: the output is turned on (POST /control/v1/output with consent) and the reopened menu shows the Output tile on.",
+  "tags": ["needs-popover", "click", "output", "dialog"],
+  "steps": [{"click": "wdi-pop-output"}, {"wait_ms": 300}, {"dialogClick": "wdi-output-consent-confirm"}, {"wait_ms": 500}],
+  "expect_labels": ["On · USB Dock Headphones", "3 monitors · every 5 s · mic on"],
+  "expect_requests": [{"method": "GET", "path": "/control/v1/outputs"}, {"method": "POST", "path": "/control/v1/output"}]
+}

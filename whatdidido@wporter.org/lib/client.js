@@ -4,6 +4,7 @@ import Soup from 'gi://Soup?version=3.0';
 
 import {CHOOSE_TEXT, hasMicChoice, micRequest, missingText, preferredMic} from './mic_model.js';
 import {parseControlFile} from './model.js';
+import {OUTPUT_CHOOSE_TEXT, outputMissingText, outputRequest} from './output_model.js';
 
 Gio._promisify(Soup.Session.prototype, 'send_and_read_async');
 Gio._promisify(Gio.File.prototype, 'load_contents_async');
@@ -11,16 +12,18 @@ Gio._promisify(Gio.File.prototype, 'load_contents_async');
 // notRunning: no control file, or nothing listening at its base_url.
 // status/code: the HTTP status and the API's {"error": code}, or the
 // client's own microphone_unset / microphone_missing (nothing was sent; the
-// latter carries the fresh inventory as `microphones`).
+// latter carries the fresh inventory as `microphones`), and output_unset /
+// output_missing likewise (`outputs`).
 // Messages never contain the token.
 export class ControlError extends Error {
-    constructor(message, {status = 0, code = null, notRunning = false, microphones = null} = {}) {
+    constructor(message, {status = 0, code = null, notRunning = false, microphones = null, outputs = null} = {}) {
         super(message);
         this.name = 'ControlError';
         this.status = status;
         this.code = code;
         this.notRunning = notRunning;
         this.microphones = microphones;
+        this.outputs = outputs;
     }
 }
 
@@ -127,6 +130,11 @@ export class ControlClient {
         return this._request('GET', '/control/v1/microphones', null, cancellable);
     }
 
+    // CONTROL_API.md Amendment 5: {inventory, outputs: [{id, label, stable_id}]}.
+    outputs(cancellable) {
+        return this._request('GET', '/control/v1/outputs', null, cancellable);
+    }
+
     command(action, cancellable) {
         return this._request('POST', '/control/v1/command', {action}, cancellable);
     }
@@ -162,6 +170,33 @@ export class ControlClient {
                 throw new ControlError(missingText(preferred), {code: 'microphone_missing', microphones: mics});
             try {
                 return await this._request('POST', '/control/v1/mic', body, cancellable);
+            } catch (e) {
+                if (attempt > 0 || e.code !== 'inventory_changed')
+                    throw e;
+            }
+        }
+    }
+
+    // Output monitor capture, like setMicOn: the chosen output (preferred:
+    // {stableId, id, label}, see output_model.js) is resolved in a fresh
+    // /outputs listing, with one retry on inventory_changed, and never
+    // replaced by another output. On carries `consent: true`: call it with on
+    // only after the user confirmed the consent dialog, or to switch an
+    // output that is already on. Off is exactly {"on": false}.
+    async setOutputOn(on, preferred, cancellable) {
+        if (!on)
+            return this._request('POST', '/control/v1/output', {on: false}, cancellable);
+        preferred = preferredMic(preferred);
+        if (!hasMicChoice(preferred))
+            throw new ControlError(OUTPUT_CHOOSE_TEXT, {code: 'output_unset'});
+        for (let attempt = 0; ; attempt++) {
+            const inv = await this.outputs(cancellable);
+            const outputs = Array.isArray(inv.outputs) ? inv.outputs : [];
+            const body = outputRequest(true, outputs, preferred, inv.inventory);
+            if (!body)
+                throw new ControlError(outputMissingText(preferred), {code: 'output_missing', outputs});
+            try {
+                return await this._request('POST', '/control/v1/output', body, cancellable);
             } catch (e) {
                 if (attempt > 0 || e.code !== 'inventory_changed')
                     throw e;

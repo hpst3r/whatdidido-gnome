@@ -297,3 +297,81 @@ cropped to the menu with a small margin. Scenarios are JSON files under
 6. **An Assign error clears when the menu closes.**
 7. **HiDPI:** the harness takes `SHOTS_SCALE` (1 default, 2 for a
    scale-2 monitor) and the popover is checked at scale 2.
+
+## Amendment 3 (output capture, whatdidido CONTROL_API.md Amendment 5)
+
+1. **Feature detection.** Everything below appears only while the status
+   has an `output` object (a server with `--allow-audio-capture` that knows
+   the output role). Without one (an older server, or no audio capture) the
+   popover, the top bar and every request are exactly as before; the status
+   card's subtitle never mentions the output. `output.available` false (the
+   server could not read its inventory, or the session is closing) is the
+   microphone's `mic.available` false: the Output source picker is hidden
+   and `GET /control/v1/outputs` is not read, and an off tile is
+   insensitive with the subtitle "Off · outputs unavailable"; unlike the
+   microphone's, a tile that is on stays on and sensitive, so Off still
+   works (the server turns an output off without reading the inventory).
+   The top-bar icon and accessible name never depend on `available`.
+2. **Output tile** (§4.4), right after the Microphone tile: icon
+   `audio-speakers-symbolic`, title "Output", accessible name "Output
+   (other participants)"; accent-filled when on; subtitle "On · <active
+   label>" (with the trouble state like the microphone's), "Off · <saved
+   label>", "Choose an output", or "Off · outputs unavailable" (§1).
+   Sensitive in the microphone's states.
+   Toggling runs `OutputController.toggle`; with no saved choice, turning
+   it on expands the Output source list instead and shows the notice
+   "Choose an output".
+3. **Output source picker** (§4.5), below the Input picker: "Output
+   source" and the active output's label (else the saved choice's, else
+   "Choose…"); its inline list ("No outputs found", "Outputs unavailable")
+   comes from `GET /control/v1/outputs`, read when the menu opens and after
+   each output action; picking runs `OutputController.choose`. Only one
+   inline list (input, output or ticket) is expanded at a time.
+4. **Consent dialog.** Every user action that turns output capture on from
+   off (the tile, or a pick after the tile asked to choose) closes the menu
+   and opens a `ModalDialog`: title "Record the output?", the session
+   page's warning as the body, "Cancel" (default and Escape) and
+   "Everyone has agreed — record". Only the confirm button sends
+   `POST /control/v1/output` with `"consent": true`; Cancel, Escape or the
+   dialog going away (the extension disabled) send nothing. Each turn-on
+   asks again. Switching a live output to another, a pick that only saves
+   (output off and not asked), turning it off, status polls and a
+   remembered output never ask, and polls never send anything. An off
+   chosen while the dialog is open wins: the later confirm sends nothing.
+5. **Notices** (§4.3): the output hint ("Choose an output", "<label> is
+   not connected") after the microphone hint; failed output requests name
+   the output ("Output capture is not enabled on the server", "Outputs
+   changed; try again").
+6. **Top bar.** A speaker icon (`audio-speakers-symbolic`) after the
+   microphone icon while `output.on` and the output is not stopped for good
+   (limit reached, failed), with the `show-output-indicator` setting; the
+   accessible name gains ", output on" whether or not the icon is shown.
+7. **Settings.** `output-stable-id`, `output-id`, `output-label` (the
+   choice, by stable id like the microphone's) and `show-output-indicator`;
+   preferences group "Output (other participants)" with "Chosen output",
+   "Forget output" and the indicator switch. No output reminder. Forget
+   output only clears the three keys, so when the saved choice goes from
+   set to cleared (`output-stable-id` and `output-id` both empty) while the
+   latest status has `output.on === true`, the extension sends
+   `POST /control/v1/output {"on": false}` once, without the dialog
+   (`OutputController.savedChanged`, `forgetTurnsOff`); never at startup,
+   while the output is off, or without an `output` object.
+8. **Actor names** (§5) gain `wdi-pop-output`, `wdi-pop-output-source`,
+   `wdi-pop-output-item-<n>`, and for the dialog `wdi-output-consent`,
+   `wdi-output-consent-cancel`, `wdi-output-consent-confirm`.
+9. **Modules** (§6): `lib/output_model.js` (pure: the choice, request
+   body, which pick needs the dialog (`chooseAction`), labels, hints, error
+   texts and `OutputController`); `popoverView` gains `tiles.output` and
+   `outputSource`; `ControlClient` gains `outputs()` and
+   `setOutputOn(on, preferred)`. The dialog is wiring in `extension.js`.
+10. **Tests:** `tests/output_model_test.js`, `tests/output_indicator_test.js`
+    (`output.available` false), `tests/output_consent_test.js` (no path
+    sends an on without the dialog), `tests/output_forget_test.js` (Forget
+    output turns it off), `tests/output_client_test.js` (against
+    `tests/fake_control.js` with the output routes),
+    `tests/output_fakes_test.js` (the fake against the real router's
+    answers: an older server's `403 forbidden`, an ungated one's
+    `409 unavailable`, `/outputs` items `id`, `label`, `stable_id`), and the
+    `output-*` screenshot scenarios, including the dialog itself
+    (`"shot": "dialog"`), its Cancel and confirm buttons, and
+    `output-unavailable` / `output-unavailable-off`.

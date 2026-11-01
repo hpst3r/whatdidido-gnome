@@ -117,7 +117,8 @@ export class Popover {
         this._notices = vbox('wdi-pop-notices');
         this._content.add_child(this._notices);
         this._buildTiles();
-        this._buildInput();
+        this._input = this._picker('wdi-pop-input');
+        this._outputPicker = this._picker('wdi-pop-output-source');
         this._buildInterval();
         this._buildNow();
         this._buildToday();
@@ -133,7 +134,7 @@ export class Popover {
         return {...this._ui};
     }
 
-    // Show one inline list ('input' | 'ticket') or none.
+    // Show one inline list ('input' | 'output' | 'ticket') or none.
     expand(list) {
         this._ui.expanded = list;
         this._changed();
@@ -264,6 +265,9 @@ export class Popover {
         this._mic = this._tile('wdi-pop-mic', 'wdi-pop-switch');
         this._mic.button.accessible_role = Atk.Role.TOGGLE_BUTTON;
         this._mic.button.connect('clicked', () => this._act(this._view?.tiles.mic.action));
+        this._output = this._tile('wdi-pop-output', 'wdi-pop-switch');
+        this._output.button.accessible_role = Atk.Role.TOGGLE_BUTTON;
+        this._output.button.connect('clicked', () => this._act(this._view?.tiles.output.action));
         this._phi = this._tile('wdi-pop-phi', 'wdi-pop-phi');
         this._phi.button.connect('clicked', () => this._link(this._view?.tiles.phi.link));
         this._window = this._tile('wdi-pop-window', 'wdi-pop-switch');
@@ -273,25 +277,28 @@ export class Popover {
         this._content.add_child(this._tiles);
     }
 
-    _buildInput() {
-        this._input = vbox('wdi-pop-card wdi-pop-picker');
+    // A source picker (Input, Output source): a row with the title and the
+    // current value that expands an inline list below it. `name` is the
+    // row's actor name; the view block comes from update() (_updatePicker).
+    _picker(name) {
+        const p = {box: vbox('wdi-pop-card wdi-pop-picker'), view: null};
         const row = hbox('wdi-pop-picker-row', {x_expand: true});
-        this._inputTitle = label('wdi-pop-picker-title', {x_expand: true});
+        p.title = label('wdi-pop-picker-title', {x_expand: true});
         const select = hbox('wdi-pop-select');
-        this._inputValue = label('wdi-pop-select-label');
-        this._inputArrow = new St.Icon({icon_name: 'pan-down-symbolic', icon_size: ICON_PX, style_class: 'wdi-pop-select-arrow'});
-        select.add_child(this._inputValue);
-        select.add_child(this._inputArrow);
-        row.add_child(this._inputTitle);
+        p.value = label('wdi-pop-select-label');
+        p.arrow = new St.Icon({icon_name: 'pan-down-symbolic', icon_size: ICON_PX, style_class: 'wdi-pop-select-arrow'});
+        select.add_child(p.value);
+        select.add_child(p.arrow);
+        row.add_child(p.title);
         row.add_child(select);
-        this._inputButton = this._button('wdi-pop-input', 'wdi-pop-picker-button', row);
-        this._inputButton.x_expand = true;
-        this._inputButton.connect('clicked', () => this._act(this._view?.input.action));
-        this._inputList = vbox('wdi-pop-list');
-        this._inputEmpty = label('wdi-pop-list-empty wdi-pop-muted');
-        this._input.add_child(this._inputButton);
-        this._input.add_child(this._inputList);
-        this._content.add_child(this._input);
+        p.button = this._button(name, 'wdi-pop-picker-button', row);
+        p.button.x_expand = true;
+        p.button.connect('clicked', () => this._act(p.view?.action));
+        p.list = vbox('wdi-pop-list');
+        p.box.add_child(p.button);
+        p.box.add_child(p.list);
+        this._content.add_child(p.box);
+        return p;
     }
 
     _buildInterval() {
@@ -637,7 +644,8 @@ export class Popover {
         this._updateStatus(view.status);
         this._updateNotices(view.notices);
         this._updateTiles(view.tiles);
-        this._updateInput(view.input);
+        this._updatePicker(this._input, view.input, 'input');
+        this._updatePicker(this._outputPicker, view.outputSource, 'output');
         this._updateInterval(view.interval);
         this._updateNow(view.now);
         this._updateToday(view.today);
@@ -711,15 +719,17 @@ export class Popover {
     _updateTiles(tiles) {
         this._tiles.visible = tiles.visible;
         this._updateTile(this._mic, tiles.mic);
+        this._updateTile(this._output, tiles.output);
         this._updateTile(this._phi, tiles.phi);
         this._updateTile(this._window, tiles.window);
         // Two per row, in order; re-laid only when the visible set changes.
-        const shown = [this._mic, this._phi, this._window].filter(t => t.button.visible);
+        const all = [this._mic, this._output, this._phi, this._window];
+        const shown = all.filter(t => t.button.visible);
         const key = shown.map(t => t.button.name).join();
         if (key === this._tileLayout)
             return;
         this._tileLayout = key;
-        for (const t of [this._mic, this._phi, this._window])
+        for (const t of all)
             t.button.get_parent()?.remove_child(t.button);
         shown.forEach((t, i) => this._tileRows[Math.floor(i / 2)].add_child(t.button));
         this._tileRows[1].visible = shown.length > 2;
@@ -756,23 +766,25 @@ export class Popover {
         return b;
     }
 
-    _updateInput(input) {
-        this._input.visible = input.visible;
-        this._inputTitle.text = input.title;
-        this._inputValue.text = input.value;
-        this._inputButton.accessible_name = input.accessibleName;
-        setSensitive(this._inputButton, input.sensitive);
-        setClass(this._input, 'wdi-pop-expanded', input.expanded);
-        this._inputArrow.icon_name = input.expanded ? 'pan-up-symbolic' : 'pan-down-symbolic';
-        this._inputList.visible = input.expanded;
-        const items = input.emptyText ? [{name: 'wdi-pop-input-empty', label: input.emptyText}] : input.items;
-        this._syncList(this._inputList, 'input', items, item => {
-            if (input.emptyText)
+    // key: the list's name in _keys and its empty row's prefix ('input', 'output').
+    _updatePicker(p, view, key) {
+        p.view = view;
+        p.box.visible = view.visible;
+        p.title.text = view.title;
+        p.value.text = view.value;
+        p.button.accessible_name = view.accessibleName;
+        setSensitive(p.button, view.sensitive);
+        setClass(p.box, 'wdi-pop-expanded', view.expanded);
+        p.arrow.icon_name = view.expanded ? 'pan-up-symbolic' : 'pan-down-symbolic';
+        p.list.visible = view.expanded;
+        const items = view.emptyText ? [{name: `wdi-pop-${key}-empty`, label: view.emptyText}] : view.items;
+        this._syncList(p.list, key, items, item => {
+            if (view.emptyText)
                 return wrap(label('wdi-pop-list-empty wdi-pop-muted', {text: item.label}));
             return this._listItem(item, () => {
-                const current = this._view?.input.items.find(i => i.name === item.name);
+                const current = p.view?.items.find(i => i.name === item.name);
                 this._ui.expanded = null;
-                this._focusNext = this._inputButton;
+                this._focusNext = p.button;
                 this._changed();
                 this._act(current?.action ?? item.action);
             });

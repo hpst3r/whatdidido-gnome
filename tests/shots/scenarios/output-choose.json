@@ -1,0 +1,9 @@
+{
+  "extends": "output-consent",
+  "description": "Output off with no saved output; clicking the Output tile asks to choose: the Output source list expands in place with the Choose an output notice, no dialog yet, nothing is sent.",
+  "tags": ["needs-popover", "click", "output"],
+  "settings": {"output-stable-id": "", "output-id": "", "output-label": ""},
+  "steps": [{"click": "wdi-pop-output"}, {"wait_ms": 300}],
+  "expect_labels": ["Choose an output", "USB Dock Headphones", "Built-in Audio Speakers"],
+  "expect_no_requests": [{"method": "POST", "path": "/control/v1/output"}]
+}

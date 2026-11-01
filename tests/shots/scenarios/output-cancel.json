@@ -1,0 +1,8 @@
+{
+  "extends": "output-consent",
+  "description": "The consent dialog cancelled: nothing is sent and the reopened menu still shows the Output tile off with the saved output.",
+  "tags": ["needs-popover", "click", "output", "dialog"],
+  "steps": [{"click": "wdi-pop-output"}, {"wait_ms": 300}, {"dialogClick": "wdi-output-consent-cancel"}, {"wait_ms": 500}],
+  "expect_labels": ["Off · USB Dock Headphones", "USB Dock Headphones"],
+  "expect_no_requests": [{"method": "POST", "path": "/control/v1/output"}]
+}

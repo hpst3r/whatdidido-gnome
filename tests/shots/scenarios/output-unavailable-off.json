@@ -1,0 +1,9 @@
+{
+  "extends": "output-unavailable",
+  "description": "Off on the Output tile while output.available is false: {\"on\": false} is sent without a dialog and the tile turns off, greyed out (outputs unavailable); still no output list is fetched.",
+  "tags": ["needs-popover", "click", "output"],
+  "steps": [{"click": "wdi-pop-output"}, {"wait_ms": 500}],
+  "expect_labels": ["Output", "Off · outputs unavailable"],
+  "expect_requests": [{"method": "POST", "path": "/control/v1/output"}],
+  "expect_no_requests": [{"method": "GET", "path": "/control/v1/outputs"}]
+}
